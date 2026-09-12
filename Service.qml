@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import "js/Url.js" as Url
 import "js/Config.js" as Config
+import "js/Entities.js" as Entities
 
 Item {
   id: root
@@ -45,6 +46,8 @@ Item {
   property bool providersBusy: false
   property bool passwordAvailable: false
   property var lastLoginResult: null
+  property var rooms: []
+  property int lightsOn: 0
   property var _cmdQueue: []
   property bool helperReady: false
   signal loginFinished(var result)
@@ -66,7 +69,7 @@ Item {
       if (w >= 1000) return (Math.round(w / 100) / 10) + " kW"
       return Math.round(w) + " W"
     }
-    if (st && st.lightsOn > 0) return st.lightsOn + " on"
+    if (root.lightsOn > 0) return root.lightsOn + " on"
     return "Hearth"
   }
   readonly property string statusText: configured ? (activeName + " · " + connectionState) : "Hearth — not connected"
@@ -136,6 +139,7 @@ Item {
     if (msg.event === "connection") {
       connectionState = String(msg.state || "idle")
       if (msg.haVersion) haVersion = String(msg.haVersion)
+      if (msg.locationName) locationName = String(msg.locationName)
       if (msg.state === "connected") lastError = ""
       if (msg.error) lastError = String(msg.error)
       return
@@ -145,8 +149,60 @@ Item {
       return
     }
     if (msg.event === "snapshot") {
+      snapFile.reload()
       return
     }
+    if (msg.event === "state_changed" && msg.entity) {
+      root.rooms = Entities.patch(root.rooms, msg.entity)
+      root.bumpRooms()
+      root.lightsOn = Entities.lightsOnCount(root.rooms)
+    }
+  }
+
+  function bumpRooms() {
+    var next = []
+    var list = root.rooms || []
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i]
+      next.push({
+        area_id: r.area_id,
+        name: r.name,
+        count: r.entities ? r.entities.length : (r.count || 0),
+        entities: r.entities ? r.entities.slice() : []
+      })
+    }
+    root.rooms = next
+  }
+
+  function applySnapshot(raw) {
+    var snap
+    try { snap = JSON.parse(String(raw || "{}")) } catch (e) { return }
+    var built = Entities.build(root.config, snap)
+    root.rooms = built.rooms || []
+    root.lightsOn = built.lightsOn || 0
+  }
+
+  function actOnEntity(entityId, serviceName) {
+    var domain = Entities.domainOf(entityId)
+    var kind = Entities.kindOf(domain)
+    var svc = serviceName || Entities.primaryService(domain, kind)
+    if (!svc || !root.config.activeInstanceId) return { ok: false, error: "Nothing to call." }
+    if (kind === "toggle") {
+      root.rooms = Entities.optimisticToggle(root.rooms, entityId)
+      root.bumpRooms()
+      root.lightsOn = Entities.lightsOnCount(root.rooms)
+    }
+    sendCmd({
+      cmd: "call",
+      instanceId: root.config.activeInstanceId,
+      payload: {
+        type: "call_service",
+        domain: domain,
+        service: svc,
+        target: { entity_id: String(entityId) }
+      }
+    }, null)
+    return { ok: true }
   }
 
   function testConnection(fields) {
@@ -273,7 +329,9 @@ Item {
   }
 
   function actJson(payload) {
-    return JSON.stringify({ ok: false, error: "Controls land in a later slice." })
+    var fields
+    try { fields = JSON.parse(payload) } catch (e) { return JSON.stringify({ ok: false, error: "Bad JSON." }) }
+    return JSON.stringify(root.actOnEntity(fields.entity_id || fields.entityId, fields.service))
   }
 
   function setActiveId(id) {
@@ -388,6 +446,15 @@ Item {
       root.configLoaded = true
       root.config = Config.emptyConfig()
     }
+  }
+
+  FileView {
+    id: snapFile
+    path: root.config && root.config.activeInstanceId ? root.cacheDir + "/entities/" + root.config.activeInstanceId + ".json" : ""
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.applySnapshot(text())
+    onLoadFailed: { root.rooms = []; root.lightsOn = 0 }
   }
 
   FileView {

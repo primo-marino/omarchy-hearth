@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import socket
 import ssl
 import sys
@@ -301,6 +302,7 @@ class HaSession:
         self.stop = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self.ha_version = ""
+        self.outbox: queue.Queue = queue.Queue()
 
     def next_id(self) -> int:
         self.msg_id += 1
@@ -319,11 +321,19 @@ class HaSession:
                 pass
 
     def call(self, payload: dict[str, Any]) -> None:
+        self.outbox.put(payload)
+
+    def _flush_outbox(self) -> None:
         if not self.ws:
-            raise RuntimeError("not connected")
-        body = dict(payload)
-        body["id"] = self.next_id()
-        self.ws.send_text(json.dumps(body))
+            return
+        while True:
+            try:
+                payload = self.outbox.get_nowait()
+            except queue.Empty:
+                return
+            body = dict(payload)
+            body["id"] = self.next_id()
+            self.ws.send_text(json.dumps(body))
 
     def _run(self) -> None:
         backoff = 1
@@ -342,15 +352,18 @@ class HaSession:
                 self._snapshot()
                 ping_at = time.monotonic() + 30
                 while not self.stop.is_set():
-                    remaining = max(0.1, ping_at - time.monotonic())
-                    self.ws.sock.settimeout(remaining)
+                    self.ws.sock.settimeout(0.2)
                     try:
+                        self._flush_outbox()
                         raw = self.ws.recv()
                     except TimeoutError:
                         if self.stop.is_set():
                             break
-                        self.call({"type": "ping"})
-                        ping_at = time.monotonic() + 30
+                        self._flush_outbox()
+                        if time.monotonic() >= ping_at:
+                            self.call({"type": "ping"})
+                            self._flush_outbox()
+                            ping_at = time.monotonic() + 30
                         continue
                     msg = json.loads(raw)
                     if msg.get("type") == "event" and (msg.get("event") or {}).get("event_type") == "state_changed":

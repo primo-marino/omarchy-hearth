@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "qml"
 
 Panel {
   id: root
@@ -20,6 +21,11 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool configured: service ? service.configured === true : false
   readonly property string connectionState: service ? String(service.connectionState || "idle") : "idle"
+  readonly property string heroMeta: {
+    if (service && service.lastError) return String(service.lastError)
+    if (connectionState === "connected") return (service && service.locationName) ? String(service.locationName) : "Online"
+    return connectionState
+  }
 
   function open() {
     openedFromHotkey = false
@@ -62,11 +68,12 @@ Panel {
   }
 
   function refresh() {
-    if (service && service.refreshEnergy) service.refreshEnergy()
+    if (service && service.refresh) service.refresh()
   }
 
   onServiceChanged: {
     if (onboardLoader.item) onboardLoader.item.service = service
+    if (roomList.service !== service) roomList.service = service
   }
 
   onOpenedChanged: {
@@ -86,33 +93,36 @@ Panel {
     centerOnBar: true
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(420))
-    contentHeight: panel.fittedContentHeight(Math.min(column.implicitHeight, Style.space(560)))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
       blocked: onboardLoader.item ? onboardLoader.item.fieldFocused === true : false
-      onCloseRequested: root.close()
+      onCloseRequested: {
+        if (roomList.openAreaId) roomList.goBack()
+        else root.close()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refresh()
-        else if (t === "s" || t === "S") { if (service) service.showSettings = true }
       }
 
-      Flickable {
-        id: panelFlick
-        anchors.fill: parent
-        contentWidth: width
-        contentHeight: column.implicitHeight
-        clip: true
-        boundsBehavior: Flickable.StopAtBounds
-        flickableDirection: Flickable.VerticalFlick
-        interactive: contentHeight > height
+      Column {
+        id: column
+        width: parent.width
+        spacing: Style.space(12)
 
-        Column {
-          id: column
-          width: panelFlick.width
-          spacing: Style.space(12)
+        // Onboard scrolls on its own so the form never sits under a connected view.
+        Flickable {
+          visible: !root.configured
+          width: parent.width
+          height: visible ? Math.min(onboardLoader.item ? onboardLoader.item.implicitHeight : 0, Style.space(520)) : 0
+          contentWidth: width
+          contentHeight: onboardLoader.item ? onboardLoader.item.implicitHeight : 0
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          interactive: contentHeight > height
 
           Loader {
             id: onboardLoader
@@ -128,39 +138,58 @@ Panel {
               }
             }
           }
+        }
 
-          Column {
-            visible: root.configured
+        Column {
+          visible: root.configured
+          width: parent.width
+          spacing: Style.space(10)
+
+          PanelHero {
             width: parent.width
-            spacing: Style.space(10)
-
-            PanelHero {
-              width: parent.width
-              title: service && service.activeName ? service.activeName : "Hearth"
-              meta: root.connectionState
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              iconComponent: Component {
-                Text {
-                  textFormat: Text.PlainText
-                  text: "󰋜"
-                  color: root.connectionState === "connected" ? root.foreground : root.dim
-                  font.pixelSize: Style.font.display
-                }
+            title: service && service.activeName ? service.activeName : "Hearth"
+            meta: root.heroMeta
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            iconComponent: Component {
+              Text {
+                textFormat: Text.PlainText
+                text: "󰋜"
+                color: root.connectionState === "connected" ? root.foreground : root.dim
+                font.pixelSize: Style.font.display
               }
             }
+            trailingControl: roomList.openAreaId !== "" ? backButton : null
+          }
 
-            Text {
+          Flickable {
+            width: parent.width
+            height: Math.min(roomList.implicitHeight, Style.space(420))
+            contentWidth: width
+            contentHeight: roomList.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+
+            RoomList {
+              id: roomList
               width: parent.width
-              text: service && service.lastError ? service.lastError : "Rooms and devices land in the next slice. This instance is saved."
-              color: service && service.lastError ? Color.urgent : root.dim
-              wrapMode: Text.WordWrap
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
+              service: root.service
+              foreground: root.foreground
+              fontFamily: root.fontFamily
             }
           }
         }
       }
+    }
+  }
+
+  Component {
+    id: backButton
+    Button {
+      text: "Back"
+      foreground: root.foreground
+      onClicked: roomList.goBack()
     }
   }
 
