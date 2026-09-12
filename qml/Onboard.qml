@@ -90,9 +90,9 @@ Column {
   }
 
   function applyLoginResult(result) {
+    if (!result || result.pending) return
+    testTimeout.stop()
     testing = false
-    if (!result) return
-    if (result.pending) return
     if (!result.ok) {
       testedOk = false
       statusKind = "error"
@@ -113,6 +113,7 @@ Column {
     testedOk = false
     statusKind = ""
     statusMessage = "Testing connection…"
+    testTimeout.restart()
     var cred = authMethod === "token" ? tokenText : passwordText
     service.testConnection({
       name: instanceName,
@@ -154,16 +155,38 @@ Column {
   onUrlTextChanged: {
     passwordAvailable = false
     testedOk = false
-    if (!parsedUrl.ok) return
-    if (!service || !service.probeProviders) return
-    probingProviders = true
-    service.probeProviders(parsedUrl.origin, showTls ? tlsInsecure : false)
+    probeDebounce.restart()
+  }
+
+  Timer {
+    id: probeDebounce
+    interval: 400
+    repeat: false
+    onTriggered: {
+      if (!root.parsedUrl.ok) return
+      if (!root.service || !root.service.probeProviders) return
+      root.probingProviders = true
+      root.service.probeProviders(root.parsedUrl.origin, root.showTls ? root.tlsInsecure : false)
+    }
+  }
+
+  Timer {
+    id: testTimeout
+    interval: 25000
+    repeat: false
+    onTriggered: {
+      if (!root.testing) return
+      root.testing = false
+      root.testedOk = false
+      root.statusKind = "error"
+      root.statusMessage = "Timed out reaching Home Assistant. Check the address, HTTP vs HTTPS, and that port 8123 is open."
+    }
   }
 
   Connections {
     target: root.service
-    function onLastLoginResultChanged() { root.applyLoginResult(root.service.lastLoginResult) }
-    function onLoginBusyChanged() { if (root.service && root.service.loginBusy) root.testing = true }
+    function onLoginFinished(result) { root.applyLoginResult(result) }
+    function onLastLoginResultChanged() { root.applyLoginResult(root.service ? root.service.lastLoginResult : null) }
     function onPasswordAvailableChanged() {
       root.passwordAvailable = !!(root.service && root.service.passwordAvailable)
       root.probingProviders = false

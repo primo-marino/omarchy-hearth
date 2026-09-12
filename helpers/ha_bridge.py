@@ -28,6 +28,7 @@ JSON_LINE_CAP = 256 * 1024
 LLAT_LIFESPAN_DAYS = 3650
 
 lock = threading.Lock()
+emit_lock = threading.Lock()
 sessions: dict[str, "HaSession"] = {}
 stdin_closed = False
 
@@ -39,10 +40,13 @@ def log(level: str, message: str) -> None:
 def emit(obj: dict[str, Any]) -> None:
     line = json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
     if len(line) > JSON_LINE_CAP:
-        log("warn", "dropping oversize stdout event %s" % obj.get("event"))
+        # Avoid recursion through log() if this is already a log event.
+        if obj.get("event") != "log":
+            log("warn", "dropping oversize stdout event %s" % obj.get("event"))
         return
-    sys.stdout.write(line + "\n")
-    sys.stdout.flush()
+    with emit_lock:
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
 
 
 def redact(obj: Any) -> Any:
@@ -428,7 +432,10 @@ class HaSession:
 def cmd_providers(cmd: dict[str, Any]) -> dict[str, Any]:
     origin = cmd.get("url") or ""
     tls = bool(cmd.get("tlsInsecure"))
-    code, body = http_json("GET", origin.rstrip("/") + "/auth/providers", tls_insecure=tls)
+    try:
+        code, body = http_json("GET", origin.rstrip("/") + "/auth/providers", tls_insecure=tls)
+    except Exception:
+        return {"ok": True, "data": {"passwordAvailable": False}}
     if code >= 400 or body is None:
         return {"ok": True, "data": {"passwordAvailable": False}}
     return {"ok": True, "data": {"passwordAvailable": has_homeassistant_provider(body)}}
@@ -667,6 +674,8 @@ def handle(cmd: dict[str, Any]) -> None:
 def main() -> None:
     ensure_dirs()
     sweep_orphans()
+    # DNS + connect must not block the stdin reader; Test waits on login.
+    socket.setdefaulttimeout(15)
     log("info", "ha_bridge ready")
     while True:
         line = sys.stdin.readline()
@@ -685,7 +694,7 @@ def main() -> None:
             continue
         if not isinstance(cmd, dict):
             continue
-        handle(cmd)
+        threading.Thread(target=handle, args=(cmd,), name="hearth-cmd", daemon=True).start()
     with lock:
         for sess in list(sessions.values()):
             sess.disconnect()

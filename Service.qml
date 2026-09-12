@@ -45,6 +45,9 @@ Item {
   property bool providersBusy: false
   property bool passwordAvailable: false
   property var lastLoginResult: null
+  property var _cmdQueue: []
+  property bool helperReady: false
+  signal loginFinished(var result)
 
   readonly property bool configured: {
     if (!config || !config.instances) return false
@@ -79,6 +82,13 @@ Item {
     return root._cmdId
   }
 
+  function flushCmdQueue() {
+    if (!helperReady || !helper.running) return
+    var q = root._cmdQueue
+    root._cmdQueue = []
+    for (var i = 0; i < q.length; i++) helper.write(q[i])
+  }
+
   function sendCmd(obj, cb) {
     var id = nextId()
     obj.id = id
@@ -92,7 +102,8 @@ Item {
     pending[id] = cb || null
     root._pending = pending
     if (!helper.running) helper.running = true
-    helper.write(line + "\n")
+    if (helperReady) helper.write(line + "\n")
+    else root._cmdQueue = root._cmdQueue.concat([line + "\n"])
     if (obj.token) obj.token = ""
     if (obj.password) obj.password = ""
     if (obj.username) obj.username = ""
@@ -112,9 +123,14 @@ Item {
     }
     if (!msg || typeof msg !== "object") return
     if (msg.event === "result") {
-      var cb = root._pending[msg.id]
-      delete root._pending[msg.id]
+      var rid = msg.id
+      var cb = root._pending[rid]
+      if (!cb && rid !== undefined && rid !== null) cb = root._pending[String(rid)] || root._pending[Number(rid)]
+      delete root._pending[rid]
+      delete root._pending[String(rid)]
+      delete root._pending[Number(rid)]
       if (cb) cb(msg)
+      else console.warn("hearth: result with no waiter id=" + rid)
       return
     }
     if (msg.event === "connection") {
@@ -171,8 +187,10 @@ Item {
         locationName = reply.locationName
         pendingAreas = reply.areas
       }
+      lastError = reply.ok ? "" : reply.error
       lastLoginResult = reply
       loginBusy = false
+      loginFinished(reply)
     })
     cmd.token = ""
     cmd.password = ""
@@ -323,7 +341,13 @@ Item {
         if (line) console.warn("hearth helper: " + line)
       }
     }
+    onStarted: {
+      root.helperReady = true
+      root._restartMs = 1000
+      root.flushCmdQueue()
+    }
     onExited: function() {
+      root.helperReady = false
       root.connectionState = "idle"
       restartTimer.interval = root._restartMs
       restartTimer.restart()
@@ -332,6 +356,7 @@ Item {
     }
     onRunningChanged: {
       if (running) root._restartMs = 1000
+      else root.helperReady = false
     }
   }
 
