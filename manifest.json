@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "hearth",
+  "name": "Hearth",
+  "version": "0.1.0",
+  "author": "Hearth",
+  "license": "MIT",
+  "description": "Remote-control Home Assistant from the Omarchy bar and menu.",
+  "kinds": ["service", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Hearth",
+    "description": "Home Assistant rooms, favorites, and energy at a glance.",
+    "category": "Home",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
