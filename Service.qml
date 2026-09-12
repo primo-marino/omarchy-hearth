@@ -403,6 +403,8 @@ Item {
       root.helperReady = true
       root._restartMs = 1000
       root.flushCmdQueue()
+      if (root.configured && root.config.activeInstanceId)
+        root.sendCmd({ cmd: "connect", instanceId: root.config.activeInstanceId }, null)
     }
     onExited: function() {
       root.helperReady = false
@@ -441,6 +443,8 @@ Item {
       }
       root.config = loaded.config
       root.configError = ""
+      if (root.helperReady && root.configured && root.config.activeInstanceId)
+        root.sendCmd({ cmd: "connect", instanceId: root.config.activeInstanceId }, null)
     }
     onLoadFailed: {
       root.configLoaded = true
