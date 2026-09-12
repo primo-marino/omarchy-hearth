@@ -207,7 +207,7 @@ Item {
     }
     config = Config.upsertInstance(config, inst)
     writeConfig()
-    sendCmd({ cmd: "connect", instanceId: pendingInstanceId }, function(msg) {
+    sendCmd({ cmd: "connect", instanceId: pendingInstanceId, url: parsed.origin, tlsInsecure: !!inst.tlsInsecure }, function(msg) {
       if (msg && msg.ok) {
         connectionState = "connected"
         lastError = ""
