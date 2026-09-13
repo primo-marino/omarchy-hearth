@@ -14,7 +14,7 @@ Entity: `fan.0x881a14fffe41c112` — currently named **Office Fan Light**, area 
 2. Confirm the fan row shows the current HA name, not the raw entity id.
 3. Note the selected chip (expect **1** if HA still shows 33%).
 4. Tap **Off**. Fan stops. Chip is Off. HA state is `off`.
-5. Tap **1**, then **2**, then **3**. Motor matches; HA `percentage` ≈ 33 / 67 / 100.
+5. Tap **1**, then **2**, then **3**. Motor matches; HA `percentage` ≈ 33 / 66 / 100 (not 67 — that stays on high).
 6. From Super-space: **Hearth → Rooms → Office → Office Fan Light** should be a **submenu** with Off / Speed 1 / 2 / 3 (not a single toggle).
 7. Keyboard in the panel: `j`/`k` moves the highlight, Enter activates, `/` filters by name.
 8. **Rename in HA:** Settings → Devices → rename the **device** (not only an entity). Hearth uses `name_by_user` on the device, then entity name.

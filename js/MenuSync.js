@@ -113,7 +113,7 @@ function build(config, state, rooms, cli, connected) {
         tree[ekey] = { icon: actIcon(ents[e]), label: actLabel(ents[e]) }
         tree[ekey + ".off"] = { icon: "󰈐", label: "Off", action: path + " act " + ents[e].entity_id + " turn_off" }
         for (var sp = 1; sp <= speeds; sp++) {
-          var pct = sp >= speeds ? 100 : Math.round(sp * step)
+          var pct = sp >= speeds ? 100 : Math.floor((sp * 100) / speeds)
           tree[ekey + "." + sp] = {
             icon: "󰈐",
             label: "Speed " + sp,

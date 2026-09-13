@@ -178,7 +178,8 @@ function fanSpeedIndex(state, attrs) {
   if (String(state || "") === "off" || String(state || "") === "unavailable") return 0
   var pct = num(attrs && attrs.percentage)
   if (!isFinite(pct) || pct <= 0) return 0
-  var idx = Math.round(pct / fanStep(attrs))
+  // Home Assistant: math.ceil(percentage / percentage_step)
+  var idx = Math.ceil(pct / fanStep(attrs) - 1e-9)
   var max = fanSpeedCount(attrs)
   if (idx < 1) idx = 1
   if (idx > max) idx = max
@@ -190,7 +191,9 @@ function fanPercentageForIndex(idx, attrs) {
   if (!isFinite(i) || i <= 0) return 0
   var max = fanSpeedCount(attrs)
   if (i >= max) return 100
-  return Math.round(i * fanStep(attrs))
+  // floor so HA's ceil(percentage / step) maps back to i.
+  // round(2 * 33.33) = 67 → ceil(67/33.33) = 3 (stuck on high).
+  return Math.floor((i * 100) / max)
 }
 
 function mediaVolumeStep(attrs) {
@@ -448,6 +451,27 @@ function lightsOnCount(rooms) {
     }
   }
   return n
+}
+
+function optimisticBrightness(rooms, entityId, brightness) {
+  if (!rooms) return rooms
+  var eid = String(entityId)
+  var bri = Number(brightness)
+  if (!isFinite(bri)) return rooms
+  for (var i = 0; i < rooms.length; i++) {
+    var ents = rooms[i].entities || []
+    for (var j = 0; j < ents.length; j++) {
+      if (ents[j].entity_id !== eid) continue
+      var attrs = ents[j].attrs || {}
+      attrs.brightness = bri <= 0 ? 0 : bri
+      ents[j].attrs = attrs
+      ents[j].state = bri <= 0 ? "off" : "on"
+      ents[j].pending = true
+      ents[j].lastError = ""
+      return rooms
+    }
+  }
+  return rooms
 }
 
 function optimisticFan(rooms, entityId, idx) {

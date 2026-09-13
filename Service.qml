@@ -356,7 +356,10 @@ Item {
     root.pendingActs = pa
     root.pendingWatch = true
     if (kind === "toggle") {
-      root.rooms = Entities.optimisticToggle(root.rooms, eid)
+      if (data && data.brightness !== undefined)
+        root.rooms = Entities.optimisticBrightness(root.rooms, eid, data.brightness)
+      else
+        root.rooms = Entities.optimisticToggle(root.rooms, eid)
       root.refreshLists()
     }
     if (kind === "fan") {
