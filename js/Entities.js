@@ -1,11 +1,20 @@
 .pragma library
 
-var TOGGLE = { light: 1, switch: 1, fan: 1, input_boolean: 1, siren: 1 }
+var TOGGLE = { light: 1, switch: 1, input_boolean: 1, siren: 1 }
+var FAN = { fan: 1 }
 var ACTIVATE = { scene: 1, script: 1, button: 1, automation: 1, input_button: 1 }
 var COVER = { cover: 1, valve: 1 }
 var LOCK = { lock: 1 }
 var CLIMATE = { climate: 1 }
 var MEDIA = { media_player: 1 }
+var VACUUM = { vacuum: 1 }
+var REMOTE = { remote: 1 }
+var HUMIDIFIER = { humidifier: 1 }
+var WATER = { water_heater: 1 }
+var LAWN = { lawn_mower: 1 }
+var ALARM = { alarm_control_panel: 1 }
+var MEDIA_PAUSE = 1
+var MEDIA_PLAY = 16384
 
 function domainOf(entityId) {
   var s = String(entityId || "")
@@ -15,20 +24,222 @@ function domainOf(entityId) {
 
 function kindOf(domain) {
   if (TOGGLE[domain]) return "toggle"
+  if (FAN[domain]) return "fan"
   if (ACTIVATE[domain]) return "activate"
   if (COVER[domain]) return "cover"
   if (LOCK[domain]) return "lock"
   if (CLIMATE[domain]) return "climate"
   if (MEDIA[domain]) return "media"
+  if (VACUUM[domain]) return "vacuum"
+  if (REMOTE[domain]) return "remote"
+  if (HUMIDIFIER[domain]) return "humidifier"
+  if (WATER[domain]) return "water"
+  if (LAWN[domain]) return "lawn"
+  if (ALARM[domain]) return "alarm"
   return ""
 }
 
-function primaryService(domain, kind) {
+function validEntityId(entityId) {
+  return /^[a-z0-9_]+\.[a-z0-9_]+$/.test(String(entityId || ""))
+}
+
+function primaryService(domain, kind, state) {
   if (kind === "toggle") return "toggle"
+  if (kind === "fan") return "set_percentage"
   if (domain === "button" || domain === "input_button") return "press"
   if (kind === "activate") return "turn_on"
   if (kind === "media") return "media_play_pause"
+  if (kind === "lock") return (state === "unlocked" || state === "unlocking") ? "lock" : "unlock"
+  if (domain === "cover") return "open_cover"
+  if (domain === "valve") return "open_valve"
+  if (kind === "vacuum") return "start"
+  if (kind === "remote") return state === "on" ? "turn_off" : "turn_on"
+  if (kind === "humidifier" || kind === "water") return state === "on" ? "turn_off" : "turn_on"
+  if (kind === "lawn") return "start_mowing"
+  if (kind === "alarm") return state === "disarmed" ? "alarm_arm_home" : "alarm_disarm"
+  if (kind === "climate") return "set_temperature"
   return ""
+}
+
+function hasService(services, domain, name) {
+  if (!services || typeof services !== "object") return true
+  var list = services[domain]
+  if (!list || !list.length) return Object.keys(services).length === 0
+  for (var i = 0; i < list.length; i++) if (String(list[i]) === String(name)) return true
+  return false
+}
+
+function num(value) {
+  var n = Number(value)
+  return isFinite(n) ? n : NaN
+}
+
+function pickAttrs(st) {
+  var a = (st && st.attributes) ? st.attributes : {}
+  return {
+    temperature: a.temperature,
+    target_temp: a.target_temp,
+    current_temperature: a.current_temperature,
+    target_temp_step: a.target_temp_step,
+    min_temp: a.min_temp,
+    max_temp: a.max_temp,
+    temperature_unit: a.temperature_unit,
+    hvac_modes: a.hvac_modes,
+    hvac_mode: a.hvac_mode,
+    volume_level: a.volume_level,
+    volume_step: a.volume_step,
+    supported_features: a.supported_features,
+    humidity: a.humidity,
+    current_humidity: a.current_humidity,
+    min_humidity: a.min_humidity,
+    max_humidity: a.max_humidity,
+    brightness: a.brightness,
+    percentage: a.percentage,
+    percentage_step: a.percentage_step,
+    preset_modes: a.preset_modes,
+    preset_mode: a.preset_mode,
+    supported_features: a.supported_features,
+    code_arm_required: a.code_arm_required,
+    code_disarm_required: a.code_disarm_required
+  }
+}
+
+function climateStep(attrs) {
+  var step = num(attrs && attrs.target_temp_step)
+  if (isFinite(step) && step > 0) return step
+  var unit = String(attrs && attrs.temperature_unit ? attrs.temperature_unit : "")
+  if (unit.indexOf("F") !== -1 || unit.indexOf("f") !== -1) return 1
+  return 0.5
+}
+
+function climateTarget(attrs) {
+  var t = num(attrs && attrs.target_temp)
+  if (isFinite(t)) return t
+  t = num(attrs && attrs.temperature)
+  if (isFinite(t)) return t
+  return num(attrs && attrs.current_temperature)
+}
+
+function clampTemp(value, attrs) {
+  var v = Number(value)
+  var lo = num(attrs && attrs.min_temp)
+  var hi = num(attrs && attrs.max_temp)
+  if (isFinite(lo) && v < lo) v = lo
+  if (isFinite(hi) && v > hi) v = hi
+  return v
+}
+
+function nextHvacMode(attrs) {
+  var modes = attrs && attrs.hvac_modes ? attrs.hvac_modes : []
+  var list = []
+  for (var i = 0; i < modes.length; i++) {
+    var m = String(modes[i])
+    if (m && m !== "hvac_action") list.push(m)
+  }
+  if (list.length === 0) return ""
+  var cur = String(attrs && attrs.hvac_mode ? attrs.hvac_mode : "")
+  var idx = -1
+  for (var j = 0; j < list.length; j++) if (list[j] === cur) idx = j
+  return list[(idx + 1) % list.length]
+}
+
+function mediaCanPlayPause(st, attrs) {
+  var a = attrs || (st && st.attributes) || {}
+  var feat = a.supported_features
+  if (feat === undefined || feat === null || feat === "") {
+    var state = String(st && st.state ? st.state : "")
+    return state === "playing" || state === "paused" || state === "idle"
+  }
+  var n = Number(feat)
+  if (!isFinite(n)) return true
+  return (n & MEDIA_PAUSE) !== 0 || (n & MEDIA_PLAY) !== 0
+}
+
+function fanStep(attrs) {
+  var step = num(attrs && attrs.percentage_step)
+  if (isFinite(step) && step > 0) return step
+  return 100 / 3
+}
+
+function fanSpeedCount(attrs) {
+  var n = Math.round(100 / fanStep(attrs))
+  if (n < 1) n = 1
+  if (n > 6) n = 6
+  return n
+}
+
+function fanHasSpeeds(attrs) {
+  var feat = num(attrs && attrs.supported_features)
+  if (isFinite(feat) && feat > 0 && (feat & 1) === 0) return false
+  return true
+}
+
+function fanSpeedIndex(state, attrs) {
+  if (String(state || "") === "off" || String(state || "") === "unavailable") return 0
+  var pct = num(attrs && attrs.percentage)
+  if (!isFinite(pct) || pct <= 0) return 0
+  var idx = Math.round(pct / fanStep(attrs))
+  var max = fanSpeedCount(attrs)
+  if (idx < 1) idx = 1
+  if (idx > max) idx = max
+  return idx
+}
+
+function fanPercentageForIndex(idx, attrs) {
+  var i = Number(idx)
+  if (!isFinite(i) || i <= 0) return 0
+  var max = fanSpeedCount(attrs)
+  if (i >= max) return 100
+  return Math.round(i * fanStep(attrs))
+}
+
+function mediaVolumeStep(attrs) {
+  var step = num(attrs && attrs.volume_step)
+  if (isFinite(step) && step > 0) return step
+  return 0.05
+}
+
+function includeRow(kind, domain, st, services) {
+  var a = (st && st.attributes) ? st.attributes : {}
+  var state = String(st && st.state ? st.state : "")
+  if (kind === "climate") {
+    if (a.temperature === undefined && a.target_temp === undefined && a.current_temperature === undefined)
+      return false
+  }
+  if (kind === "media") {
+    if (!mediaCanPlayPause(st, a) && a.volume_level === undefined) return false
+  }
+  if (kind === "remote") {
+    if (state !== "on" && state !== "off") return false
+    if (!hasService(services, "remote", "turn_on") && !hasService(services, "remote", "turn_off")) return false
+  }
+  if (kind === "alarm") {
+    if (a.code_arm_required === true || a.code_disarm_required === true) return false
+    if (!hasService(services, "alarm_control_panel", "alarm_arm_home") &&
+        !hasService(services, "alarm_control_panel", "alarm_disarm")) return false
+  }
+  if (kind === "vacuum") {
+    if (!hasService(services, "vacuum", "start") && !hasService(services, "vacuum", "return_to_base")) return false
+  }
+  if (kind === "humidifier") {
+    if (!hasService(services, "humidifier", "turn_on") && !hasService(services, "humidifier", "turn_off") &&
+        !hasService(services, "humidifier", "set_humidity") && !hasService(services, "humidifier", "set_temperature"))
+      return false
+  }
+  if (kind === "water") {
+    if (!hasService(services, "water_heater", "turn_on") && !hasService(services, "water_heater", "turn_off") &&
+        !hasService(services, "water_heater", "set_temperature"))
+      return false
+  }
+  if (kind === "lawn") {
+    if (!hasService(services, "lawn_mower", "start_mowing") && !hasService(services, "lawn_mower", "dock")) return false
+  }
+  return true
+}
+
+function coverService(domain, action) {
+  if (domain === "valve") return action + "_valve"
+  return action + "_cover"
 }
 
 function isHidden(reg) {
@@ -90,6 +301,7 @@ function build(config, snap) {
   var devicesIn = (snap && snap.devices) ? snap.devices : []
   var regsIn = (snap && snap.entities) ? snap.entities : []
   var statesIn = (snap && snap.states) ? snap.states : []
+  var services = (snap && snap.services) ? snap.services : null
 
   var devices = ({})
   for (var d = 0; d < devicesIn.length; d++) {
@@ -138,6 +350,9 @@ function build(config, snap) {
     if (!includeAll && !allow[eid]) continue
     var name = friendly(st, registry, eid)
     var state = String(st.state || "")
+    if (!validEntityId(eid)) continue
+    if (!includeRow(kind, domain, st, services)) continue
+    var attrs = pickAttrs(st)
     var row = {
       entity_id: eid,
       name: name,
@@ -145,13 +360,17 @@ function build(config, snap) {
       kind: kind,
       state: state,
       area_id: areaId,
-      service: primaryService(domain, kind)
+      service: primaryService(domain, kind, state),
+      attrs: attrs,
+      favorite: false,
+      pending: false,
+      lastError: ""
     }
     var bucket = areaId || "unassigned"
     if (!byArea[bucket]) byArea[bucket] = []
     byArea[bucket].push(row)
     count++
-    if (kind === "toggle" && (state === "on" || Number(st.attributes && st.attributes.brightness) > 0))
+    if ((kind === "toggle" || kind === "fan") && (state === "on" || Number(st.attributes && st.attributes.brightness) > 0 || Number(st.attributes && st.attributes.percentage) > 0))
       lightsOn++
   }
 
@@ -184,8 +403,14 @@ function patch(rooms, entity) {
     for (var j = 0; j < ents.length; j++) {
       if (ents[j].entity_id === eid) {
         ents[j].state = state
+        ents[j].pending = false
+        ents[j].lastError = ""
+        ents[j].service = primaryService(ents[j].domain, ents[j].kind, state)
+        if (entity.attributes) ents[j].attrs = pickAttrs(entity)
         if (entity.attributes && entity.attributes.friendly_name)
           ents[j].name = String(entity.attributes.friendly_name)
+        else if (entity.name)
+          ents[j].name = String(entity.name)
         return rooms
       }
     }
@@ -199,10 +424,31 @@ function lightsOnCount(rooms) {
   for (var i = 0; i < rooms.length; i++) {
     var ents = rooms[i].entities || []
     for (var j = 0; j < ents.length; j++) {
-      if (ents[j].kind === "toggle" && ents[j].state === "on") n++
+      var k = ents[j].kind
+      if ((k === "toggle" || k === "fan") && ents[j].state === "on") n++
     }
   }
   return n
+}
+
+function optimisticFan(rooms, entityId, idx) {
+  if (!rooms) return rooms
+  var eid = String(entityId)
+  var speed = Number(idx)
+  for (var i = 0; i < rooms.length; i++) {
+    var ents = rooms[i].entities || []
+    for (var j = 0; j < ents.length; j++) {
+      if (ents[j].entity_id !== eid) continue
+      var attrs = ents[j].attrs || {}
+      attrs.percentage = fanPercentageForIndex(speed, attrs)
+      ents[j].attrs = attrs
+      ents[j].state = speed <= 0 ? "off" : "on"
+      ents[j].pending = true
+      ents[j].lastError = ""
+      return rooms
+    }
+  }
+  return rooms
 }
 
 function optimisticToggle(rooms, entityId) {
@@ -213,9 +459,121 @@ function optimisticToggle(rooms, entityId) {
     for (var j = 0; j < ents.length; j++) {
       if (ents[j].entity_id === eid && ents[j].kind === "toggle") {
         ents[j].state = ents[j].state === "on" ? "off" : "on"
+        ents[j].pending = true
+        ents[j].lastError = ""
         return rooms
       }
     }
   }
   return rooms
+}
+
+function findEntity(rooms, entityId) {
+  var eid = String(entityId || "")
+  if (!rooms) return null
+  for (var i = 0; i < rooms.length; i++) {
+    var ents = rooms[i].entities || []
+    for (var j = 0; j < ents.length; j++) {
+      if (ents[j].entity_id === eid) return ents[j]
+    }
+  }
+  return null
+}
+
+function cloneRow(row) {
+  if (!row) return null
+  return {
+    entity_id: row.entity_id,
+    name: row.name,
+    domain: row.domain,
+    kind: row.kind,
+    state: row.state,
+    area_id: row.area_id,
+    service: row.service,
+    attrs: row.attrs || {},
+    favorite: !!row.favorite,
+    pending: !!row.pending,
+    lastError: row.lastError || ""
+  }
+}
+
+function stubEntity(entityId) {
+  var eid = String(entityId || "")
+  var domain = domainOf(eid)
+  var kind = kindOf(domain)
+  return {
+    entity_id: eid,
+    name: eid,
+    domain: domain,
+    kind: kind || "toggle",
+    state: "unavailable",
+    area_id: "",
+    service: primaryService(domain, kind || "toggle", "unavailable"),
+    attrs: {},
+    favorite: true,
+    pending: false,
+    lastError: ""
+  }
+}
+
+function markFavorites(rooms, favoriteIds) {
+  var set = ({})
+  var ids = favoriteIds || []
+  for (var i = 0; i < ids.length; i++) set[String(ids[i])] = true
+  if (!rooms) return rooms
+  for (var r = 0; r < rooms.length; r++) {
+    var ents = rooms[r].entities || []
+    for (var j = 0; j < ents.length; j++)
+      ents[j].favorite = !!set[ents[j].entity_id]
+  }
+  return rooms
+}
+
+function setPending(rooms, entityId, pending, lastError) {
+  var eid = String(entityId || "")
+  if (!rooms) return rooms
+  for (var i = 0; i < rooms.length; i++) {
+    var ents = rooms[i].entities || []
+    for (var j = 0; j < ents.length; j++) {
+      if (ents[j].entity_id === eid) {
+        ents[j].pending = !!pending
+        if (lastError !== undefined) ents[j].lastError = String(lastError || "")
+        return rooms
+      }
+    }
+  }
+  return rooms
+}
+
+function favoritesList(rooms, favoriteIds) {
+  var out = []
+  var ids = favoriteIds || []
+  for (var i = 0; i < ids.length; i++) {
+    var eid = String(ids[i])
+    if (!validEntityId(eid)) continue
+    var found = findEntity(rooms, eid)
+    if (found) {
+      var row = cloneRow(found)
+      row.favorite = true
+      out.push(row)
+    } else {
+      out.push(stubEntity(eid))
+    }
+  }
+  out.sort(function(a, b) { return String(a.name).localeCompare(String(b.name)) })
+  return out
+}
+
+function recentsList(rooms, recents) {
+  var out = []
+  var list = recents || []
+  for (var i = 0; i < list.length; i++) {
+    var item = list[i]
+    var eid = item && item.entity_id ? String(item.entity_id) : String(item || "")
+    if (!validEntityId(eid)) continue
+    var found = findEntity(rooms, eid)
+    if (!found) continue
+    out.push(cloneRow(found))
+  }
+  return out
 }

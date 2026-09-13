@@ -4,6 +4,8 @@ import Quickshell.Io
 import "js/Url.js" as Url
 import "js/Config.js" as Config
 import "js/Entities.js" as Entities
+import "js/Energy.js" as EnergyJs
+import "js/MenuSync.js" as MenuSync
 
 Item {
   id: root
@@ -25,6 +27,11 @@ Item {
     if (url.indexOf("file://") === 0) url = url.substring(7)
     return url
   }
+  readonly property string cliPath: {
+    var url = String(Qt.resolvedUrl("helpers/hearth"))
+    if (url.indexOf("file://") === 0) url = url.substring(7)
+    return url
+  }
 
   property var config: Config.emptyConfig()
   property var state: Config.emptyState()
@@ -37,6 +44,8 @@ Item {
   property string haVersion: ""
   property string locationName: ""
   property bool showSettings: false
+  property bool addingInstance: false
+  property string _prevConnection: "idle"
   property int _cmdId: 1
   property var _pending: ({})
   property string _stdoutBuf: ""
@@ -47,9 +56,15 @@ Item {
   property bool passwordAvailable: false
   property var lastLoginResult: null
   property var rooms: []
+  property var allAreas: []
+  property var favoriteEntities: []
+  property var recentEntities: []
   property int lightsOn: 0
   property var _cmdQueue: []
   property bool helperReady: false
+  property string pendingOpenAreaId: ""
+  property var pendingActs: ({})
+  property bool pendingWatch: false
   signal loginFinished(var result)
 
   readonly property bool configured: {
@@ -61,14 +76,15 @@ Item {
     var inst = Config.findInstance(config, config.activeInstanceId)
     return inst && inst.name ? inst.name : "Hearth"
   }
+  readonly property var energy: {
+    var st = state && state.instances ? state.instances[config.activeInstanceId] : null
+    if (st && st.energy) return st.energy
+    return EnergyJs.empty()
+  }
   readonly property string pillLabel: {
     if (!configured) return "Hearth"
-    var st = state && state.instances ? state.instances[config.activeInstanceId] : null
-    if (st && st.energy && isFinite(Number(st.energy.solarPowerW)) && Number(st.energy.solarPowerW) > 0) {
-      var w = Number(st.energy.solarPowerW)
-      if (w >= 1000) return (Math.round(w / 100) / 10) + " kW"
-      return Math.round(w) + " W"
-    }
+    var power = EnergyJs.formatPower(root.energy && root.energy.solarPowerW)
+    if (power) return power
     if (root.lightsOn > 0) return root.lightsOn + " on"
     return "Hearth"
   }
@@ -137,11 +153,15 @@ Item {
       return
     }
     if (msg.event === "connection") {
-      connectionState = String(msg.state || "idle")
+      var nextState = String(msg.state || "idle")
+      var wasUp = root._prevConnection === "connected"
+      connectionState = nextState
       if (msg.haVersion) haVersion = String(msg.haVersion)
       if (msg.locationName) locationName = String(msg.locationName)
-      if (msg.state === "connected") lastError = ""
+      if (nextState === "connected") lastError = ""
       if (msg.error) lastError = String(msg.error)
+      if (wasUp && nextState !== "connected") root.notifyLoss()
+      root._prevConnection = nextState
       return
     }
     if (msg.event === "log" && msg.level === "error") {
@@ -150,12 +170,42 @@ Item {
     }
     if (msg.event === "snapshot") {
       snapFile.reload()
+      root.refreshEnergy(true)
       return
     }
     if (msg.event === "state_changed" && msg.entity) {
+      var eid = String(msg.entity.entity_id || "")
       root.rooms = Entities.patch(root.rooms, msg.entity)
-      root.bumpRooms()
-      root.lightsOn = Entities.lightsOnCount(root.rooms)
+      if (eid && root.pendingActs[eid]) {
+        var rec = root.pendingActs[eid]
+        var nextPending = root.pendingActs
+        delete nextPending[eid]
+        root.pendingActs = nextPending
+        root.pendingWatch = root.hasPendingActs()
+        if (rec && rec.kind === "toggle") root.recordRecent(eid)
+      }
+      if (EnergyJs.isPowerEntity(root.energy, eid)) {
+        var w = EnergyJs.toWatts(msg.entity.state, msg.entity.attributes)
+        if (isFinite(w)) root.patchEnergyPower(w)
+      }
+      root.refreshLists()
+    }
+  }
+
+  function copyEntity(e) {
+    if (!e) return e
+    return {
+      entity_id: e.entity_id,
+      name: e.name,
+      domain: e.domain,
+      kind: e.kind,
+      state: e.state,
+      area_id: e.area_id,
+      service: e.service,
+      attrs: e.attrs || {},
+      favorite: !!e.favorite,
+      pending: !!e.pending,
+      lastError: e.lastError || ""
     }
   }
 
@@ -164,44 +214,181 @@ Item {
     var list = root.rooms || []
     for (var i = 0; i < list.length; i++) {
       var r = list[i]
+      var ents = []
+      var src = r.entities || []
+      for (var j = 0; j < src.length; j++) ents.push(root.copyEntity(src[j]))
       next.push({
         area_id: r.area_id,
         name: r.name,
-        count: r.entities ? r.entities.length : (r.count || 0),
-        entities: r.entities ? r.entities.slice() : []
+        count: ents.length,
+        entities: ents
       })
     }
     root.rooms = next
   }
 
+  function activeFavorites() {
+    return Config.instanceState(root.state, root.config.activeInstanceId).favorites
+  }
+
+  function refreshLists() {
+    var inst = Config.instanceState(root.state, root.config.activeInstanceId)
+    root.rooms = Entities.markFavorites(root.rooms, inst.favorites)
+    root.bumpRooms()
+    root.favoriteEntities = Entities.favoritesList(root.rooms, inst.favorites)
+    root.recentEntities = Entities.recentsList(root.rooms, inst.recents)
+    root.lightsOn = Entities.lightsOnCount(root.rooms)
+    root.scheduleMenuSync()
+  }
+
   function applySnapshot(raw) {
     var snap
     try { snap = JSON.parse(String(raw || "{}")) } catch (e) { return }
+    var areas = []
+    var rawAreas = snap.areas || []
+    for (var i = 0; i < rawAreas.length; i++) {
+      if (!rawAreas[i]) continue
+      var aid = String(rawAreas[i].area_id || rawAreas[i].id || "")
+      if (!aid) continue
+      areas.push({ area_id: aid, name: String(rawAreas[i].name || aid) })
+    }
+    areas.sort(function(a, b) { return a.name.localeCompare(b.name) })
+    root.allAreas = areas
     var built = Entities.build(root.config, snap)
     root.rooms = built.rooms || []
-    root.lightsOn = built.lightsOn || 0
+    root.refreshLists()
   }
 
-  function actOnEntity(entityId, serviceName) {
-    var domain = Entities.domainOf(entityId)
-    var kind = Entities.kindOf(domain)
-    var svc = serviceName || Entities.primaryService(domain, kind)
-    if (!svc || !root.config.activeInstanceId) return { ok: false, error: "Nothing to call." }
-    if (kind === "toggle") {
-      root.rooms = Entities.optimisticToggle(root.rooms, entityId)
-      root.bumpRooms()
-      root.lightsOn = Entities.lightsOnCount(root.rooms)
+  function hasPendingActs() {
+    var pa = root.pendingActs
+    for (var k in pa) {
+      if (Object.prototype.hasOwnProperty.call(pa, k) && pa[k]) return true
     }
+    return false
+  }
+
+  function failAct(entityId, err) {
+    var eid = String(entityId || "")
+    var pa = root.pendingActs
+    var rec = pa[eid]
+    if (rec && rec.kind === "toggle")
+      root.rooms = Entities.optimisticToggle(root.rooms, eid)
+    root.rooms = Entities.setPending(root.rooms, eid, false, err || "Call failed.")
+    delete pa[eid]
+    root.pendingActs = pa
+    root.pendingWatch = root.hasPendingActs()
+    root.refreshLists()
+  }
+
+  function expirePending() {
+    var now = Date.now()
+    var pa = root.pendingActs
+    var stale = []
+    for (var k in pa) {
+      if (!Object.prototype.hasOwnProperty.call(pa, k) || !pa[k]) continue
+      if (now - pa[k].at >= 2000) stale.push(k)
+    }
+    for (var i = 0; i < stale.length; i++) root.failAct(stale[i], "No response")
+  }
+
+  function recordRecent(entityId) {
+    if (!root.config.activeInstanceId) return
+    root.state = Config.pushRecent(root.state, root.config.activeInstanceId, entityId)
+    root.writeState()
+    root.refreshLists()
+  }
+
+  function writeState() {
+    stateFile.setText(JSON.stringify(root.state, null, 2) + "\n")
+  }
+
+  function isFavorite(entityId) {
+    var favs = root.activeFavorites()
+    var eid = String(entityId || "")
+    for (var i = 0; i < favs.length; i++) if (String(favs[i]) === eid) return true
+    return false
+  }
+
+  function toggleFavorite(entityId) {
+    var eid = String(entityId || "")
+    if (!Entities.validEntityId(eid)) return { ok: false, error: "Bad entity id." }
+    if (!root.config.activeInstanceId) return { ok: false, error: "No instance." }
+    var result = Config.toggleFavorite(root.state, root.config.activeInstanceId, eid)
+    root.state = result.state
+    root.writeState()
+    root.refreshLists()
+    return { ok: true, starred: result.starred, favorites: result.favorites }
+  }
+
+  function patchEnergyPower(watts) {
+    if (!root.config.activeInstanceId) return
+    var next = Config.ensureInstanceState(root.state, root.config.activeInstanceId)
+    var bag = next.instances[root.config.activeInstanceId]
+    var en = bag.energy && typeof bag.energy === "object" ? bag.energy : EnergyJs.empty()
+    en.solarPowerW = watts
+    bag.energy = en
+    root.state = next
+    root.writeState()
+  }
+
+  function applyEnergy(data) {
+    if (!root.config.activeInstanceId) return
+    var parsed = EnergyJs.fromHelper(data)
+    var next = Config.ensureInstanceState(root.state, root.config.activeInstanceId)
+    next.instances[root.config.activeInstanceId].energy = parsed
+    root.state = next
+    root.writeState()
+  }
+
+  function actOnEntity(entityId, serviceName, data) {
+    var eid = String(entityId || "")
+    if (!Entities.validEntityId(eid)) return { ok: false, error: "Bad entity id." }
+    var domain = Entities.domainOf(eid)
+    var kind = Entities.kindOf(domain)
+    var found = Entities.findEntity(root.rooms, eid)
+    var svc = serviceName || Entities.primaryService(domain, kind, found ? found.state : "")
+    if (!svc || !root.config.activeInstanceId) return { ok: false, error: "Nothing to call." }
+    var pa = root.pendingActs
+    pa[eid] = { kind: kind, at: Date.now() }
+    root.pendingActs = pa
+    root.pendingWatch = true
+    if (kind === "toggle") {
+      root.rooms = Entities.optimisticToggle(root.rooms, eid)
+      root.refreshLists()
+    }
+    if (kind === "fan") {
+      var pct = data && data.percentage !== undefined ? Number(data.percentage) : (svc === "turn_off" ? 0 : NaN)
+      var idx = (!isFinite(pct) || pct <= 0 || svc === "turn_off") ? 0 : Entities.fanSpeedIndex("on", {
+        percentage: pct,
+        percentage_step: found && found.attrs ? found.attrs.percentage_step : undefined
+      })
+      root.rooms = Entities.optimisticFan(root.rooms, eid, idx)
+      root.refreshLists()
+    }
+    var payload = {
+      type: "call_service",
+      domain: domain,
+      service: svc,
+      target: { entity_id: eid }
+    }
+    if (data && typeof data === "object") payload.service_data = data
     sendCmd({
       cmd: "call",
       instanceId: root.config.activeInstanceId,
-      payload: {
-        type: "call_service",
-        domain: domain,
-        service: svc,
-        target: { entity_id: String(entityId) }
+      payload: payload
+    }, function(msg) {
+      if (msg && msg.ok) {
+        if (kind !== "toggle") {
+          var done = root.pendingActs
+          delete done[eid]
+          root.pendingActs = done
+          root.pendingWatch = root.hasPendingActs()
+          root.recordRecent(eid)
+        }
+      } else {
+        root.failAct(eid, msg && msg.error ? String(msg.error) : "Call failed.")
       }
-    }, null)
+    })
     return { ok: true }
   }
 
@@ -285,20 +472,23 @@ Item {
       if (msg && msg.ok) {
         connectionState = "connected"
         lastError = ""
+        root.refreshEnergy(true)
       } else {
         connectionState = "failed"
         lastError = msg && msg.error ? String(msg.error) : "Connect failed."
       }
     })
     pendingInstanceId = ""
+    root.addingInstance = false
     return { ok: true, instanceId: inst.id }
   }
 
   function cancelOnboard() {
-    if (!pendingInstanceId) return
-    sendCmd({ cmd: "forget", instanceId: pendingInstanceId }, null)
+    if (pendingInstanceId)
+      sendCmd({ cmd: "forget", instanceId: pendingInstanceId }, null)
     pendingInstanceId = ""
     pendingAreas = []
+    root.addingInstance = false
   }
 
   function refresh() {
@@ -306,13 +496,84 @@ Item {
     sendCmd({ cmd: "connect", instanceId: config.activeInstanceId }, null)
   }
 
-  function refreshEnergy() {
+  function refreshEnergy(force) {
     if (!configured) return
-    sendCmd({ cmd: "energy", instanceId: config.activeInstanceId }, null)
+    if (!force) {
+      var en = root.energy
+      if (en && en.enabled === false && en.fetchedAt) {
+        var t = Date.parse(en.fetchedAt)
+        if (isFinite(t) && (Date.now() - t) < 3600000) return
+      }
+    }
+    sendCmd({ cmd: "energy", instanceId: config.activeInstanceId }, function(msg) {
+      if (msg && msg.ok && msg.data) root.applyEnergy(msg.data)
+      else root.applyEnergy(EnergyJs.empty())
+    })
   }
 
   function writeConfig() {
     configFile.setText(JSON.stringify(config, null, 2) + "\n")
+  }
+
+  function activeInstance() {
+    return Config.findInstance(root.config, root.config.activeInstanceId)
+  }
+
+  function setSelection(fields) {
+    var inst = root.activeInstance()
+    if (!inst) return { ok: false, error: "No instance." }
+    var next = {
+      id: inst.id,
+      name: inst.name,
+      url: inst.url,
+      tlsInsecure: !!inst.tlsInsecure,
+      plaintextHttp: !!inst.plaintextHttp,
+      httpAcknowledged: !!inst.httpAcknowledged,
+      allRooms: !!(fields && fields.allRooms),
+      selectedAreaIds: (fields && fields.selectedAreaIds) ? fields.selectedAreaIds : [],
+      includeAllEntities: fields && fields.includeAllEntities !== undefined ? !!fields.includeAllEntities : inst.includeAllEntities !== false,
+      selectedEntityIds: inst.selectedEntityIds || []
+    }
+    root.config = Config.upsertInstance(root.config, next)
+    root.writeConfig()
+    snapFile.reload()
+    return { ok: true }
+  }
+
+  function replaceToken(token) {
+    var inst = root.activeInstance()
+    if (!inst) return { ok: false, error: "No instance." }
+    var tok = String(token || "")
+    if (!tok) return { ok: false, error: "Paste a token." }
+    root.pendingInstanceId = String(inst.id)
+    return root.testConnection({
+      name: inst.name,
+      url: inst.url,
+      token: tok,
+      tlsInsecure: !!inst.tlsInsecure,
+      authMethod: "token"
+    })
+  }
+
+  function removeActiveInstance() {
+    var id = String(root.config.activeInstanceId || "")
+    if (!id) return { ok: false, error: "No instance." }
+    root.sendCmd({ cmd: "forget", instanceId: id }, null)
+    root.config = Config.removeInstance(root.config, id)
+    root.state = Config.removeInstanceState(root.state, id)
+    root.writeConfig()
+    root.writeState()
+    root.showSettings = false
+    root.rooms = []
+    root.favoriteEntities = []
+    root.recentEntities = []
+    root.lightsOn = 0
+    root.allAreas = []
+    if (root.configured && root.config.activeInstanceId)
+      root.sendCmd({ cmd: "connect", instanceId: root.config.activeInstanceId }, null)
+    else
+      root.connectionState = "idle"
+    return { ok: true }
   }
 
   function statusJson() {
@@ -331,15 +592,37 @@ Item {
   function actJson(payload) {
     var fields
     try { fields = JSON.parse(payload) } catch (e) { return JSON.stringify({ ok: false, error: "Bad JSON." }) }
-    return JSON.stringify(root.actOnEntity(fields.entity_id || fields.entityId, fields.service))
+    return JSON.stringify(root.actOnEntity(fields.entity_id || fields.entityId, fields.service, fields.service_data || fields.data))
   }
 
   function setActiveId(id) {
     if (!Config.findInstance(config, id)) return JSON.stringify({ ok: false, error: "Unknown instance." })
-    config.activeInstanceId = String(id)
+    var prev = String(config.activeInstanceId || "")
+    var next = String(id)
+    if (prev && prev !== next) sendCmd({ cmd: "disconnect", instanceId: prev }, null)
+    config.activeInstanceId = next
     writeConfig()
-    sendCmd({ cmd: "connect", instanceId: String(id) }, null)
+    sendCmd({ cmd: "connect", instanceId: next }, null)
+    root.scheduleMenuSync()
     return JSON.stringify({ ok: true })
+  }
+
+  function beginAddInstance() {
+    root.pendingInstanceId = ""
+    root.addingInstance = true
+    root.showSettings = false
+    if (root.shell && root.shell.summon) root.shell.summon("hearth", "{}")
+  }
+
+  function finishAddInstance() {
+    root.addingInstance = false
+  }
+
+  function notifyLoss() {
+    var detail = root.lastError ? String(root.lastError) : "Reconnecting to Home Assistant"
+    notifyProc.command = ["omarchy-notification-send", "-g", "󰋜", "-u", "normal", "Hearth disconnected", detail]
+    notifyProc.running = false
+    notifyProc.running = true
   }
 
   function listInstancesJson() {
@@ -359,15 +642,28 @@ Item {
   }
 
   function toggleFavoriteJson(payload) {
-    return JSON.stringify({ ok: false, error: "Favorites land in a later slice." })
+    var fields
+    try { fields = JSON.parse(payload) } catch (e) { return JSON.stringify({ ok: false, error: "Bad JSON." }) }
+    return JSON.stringify(root.toggleFavorite(fields.entity_id || fields.entityId))
   }
 
   function setSelectionJson(payload) {
-    return JSON.stringify({ ok: false, error: "Selection lands in a later slice." })
+    var fields
+    try { fields = JSON.parse(payload) } catch (e) { return JSON.stringify({ ok: false, error: "Bad JSON." }) }
+    return JSON.stringify(root.setSelection(fields))
+  }
+
+  function scheduleMenuSync() {
+    menuDebounce.restart()
   }
 
   function menuSyncNow() {
-    return JSON.stringify({ ok: true, skipped: true })
+    var tree = MenuSync.build(root.config, root.state, root.rooms, root.cliPath, root.connected)
+    menuTreeFile.setText(JSON.stringify(tree, null, 2) + "\n")
+    menuProc.command = ["python3", root.cliPath, "menu-sync"]
+    menuProc.running = false
+    menuProc.running = true
+    return JSON.stringify({ ok: true, pending: true })
   }
 
   function reloadFiles() {
@@ -377,13 +673,30 @@ Item {
   }
 
   Component.onCompleted: {
-    mkdir.command = ["mkdir", "-p", "-m", "0700", configDir, stateDir, cacheDir + "/entities"]
+    mkdir.command = ["mkdir", "-p", "-m", "0700", configDir, stateDir, cacheDir, cacheDir + "/entities"]
     mkdir.running = true
     helper.running = true
   }
 
   Process {
     id: mkdir
+  }
+
+  Process {
+    id: menuProc
+    running: false
+  }
+
+  Process {
+    id: notifyProc
+    running: false
+  }
+
+  Timer {
+    id: menuDebounce
+    interval: 250
+    repeat: false
+    onTriggered: root.menuSyncNow()
   }
 
   Process {
@@ -403,8 +716,10 @@ Item {
       root.helperReady = true
       root._restartMs = 1000
       root.flushCmdQueue()
-      if (root.configured && root.config.activeInstanceId)
+      if (root.configured && root.config.activeInstanceId) {
         root.sendCmd({ cmd: "connect", instanceId: root.config.activeInstanceId }, null)
+        root.refreshEnergy(true)
+      }
     }
     onExited: function() {
       root.helperReady = false
@@ -427,6 +742,22 @@ Item {
     onTriggered: helper.running = true
   }
 
+  Timer {
+    id: pendingWatchTimer
+    interval: 500
+    repeat: true
+    running: root.pendingWatch
+    onTriggered: root.expirePending()
+  }
+
+  Timer {
+    id: energyTimer
+    interval: 600000
+    repeat: true
+    running: root.configured
+    onTriggered: root.refreshEnergy(false)
+  }
+
   FileView {
     id: configFile
     path: root.configPath
@@ -445,10 +776,12 @@ Item {
       root.configError = ""
       if (root.helperReady && root.configured && root.config.activeInstanceId)
         root.sendCmd({ cmd: "connect", instanceId: root.config.activeInstanceId }, null)
+      root.scheduleMenuSync()
     }
     onLoadFailed: {
       root.configLoaded = true
       root.config = Config.emptyConfig()
+      root.scheduleMenuSync()
     }
   }
 
@@ -469,9 +802,36 @@ Item {
     printErrors: false
     onLoaded: {
       var loaded = Config.loadState(text())
-      if (loaded.ok) root.state = loaded.state
+      if (loaded.ok) {
+        root.state = loaded.state
+        root.refreshLists()
+      }
     }
-    onLoadFailed: root.state = Config.emptyState()
+    onLoadFailed: {
+      root.state = Config.emptyState()
+      root.refreshLists()
+    }
+  }
+
+  FileView {
+    id: menuTreeFile
+    path: root.cacheDir + "/menu-tree.json"
+    atomicWrites: true
+    printErrors: false
+  }
+
+  FileView {
+    id: pendingRoomFile
+    path: root.cacheDir + "/pending-room"
+    watchChanges: true
+    printErrors: false
+    onLoaded: {
+      var t = String(text() || "").replace(/^\s+|\s+$/g, "")
+      if (t) {
+        root.pendingOpenAreaId = t
+        pendingRoomFile.setText("")
+      }
+    }
   }
 
   IpcHandler {
@@ -487,6 +847,7 @@ Item {
     function toggleFavorite(payload: string): string { return root.toggleFavoriteJson(payload) }
     function setSelection(payload: string): string { return root.setSelectionJson(payload) }
     function menuSync(): string { return root.menuSyncNow() }
+    function addInstance(): string { root.beginAddInstance(); return "ok" }
     function reload(): string { return root.reloadFiles() }
     function openPanel(): string {
       return (root.shell && root.shell.summon && root.shell.summon("hearth", "{}")) ? "ok" : "error"

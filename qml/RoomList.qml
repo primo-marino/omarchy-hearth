@@ -7,6 +7,7 @@ Column {
   spacing: Style.space(8)
 
   property var service: null
+  property var bar: null
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
   property string openAreaId: ""
@@ -18,6 +19,8 @@ Column {
       if (String(rooms[i].area_id) === String(openAreaId)) return rooms[i]
     return null
   }
+
+  signal entityTouched(string entityId)
 
   function goBack() { openAreaId = "" }
 
@@ -64,8 +67,10 @@ Column {
         width: root.width
         entity: modelData
         service: root.service
+        bar: root.bar
         foreground: root.foreground
         fontFamily: root.fontFamily
+        onTouched: root.entityTouched(modelData.entity_id || "")
       }
     }
   }

@@ -18,6 +18,32 @@ import urllib.request
 from typing import Any, Optional
 
 from rfc6455 import MAX_FRAME, WebSocketClosed, WebSocketError, connect as ws_connect
+import energy as energy_lib
+
+SERVICE_DOMAINS = (
+    "vacuum",
+    "remote",
+    "humidifier",
+    "water_heater",
+    "lawn_mower",
+    "alarm_control_panel",
+    "climate",
+    "media_player",
+)
+
+
+def slim_services(result: Any) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    if not isinstance(result, dict):
+        return out
+    for domain in SERVICE_DOMAINS:
+        spec = result.get(domain)
+        if not isinstance(spec, dict):
+            continue
+        svcs = spec.get("services")
+        if isinstance(svcs, dict):
+            out[domain] = list(svcs.keys())
+    return out
 
 HOME = os.environ.get("HOME", "")
 CONFIG_DIR = os.path.join(HOME, ".config", "omarchy", "hearth")
@@ -275,6 +301,34 @@ def ws_get_config(ws, next_id) -> dict[str, Any]:
             return msg.get("result") or {}
 
 
+def ws_call(ws, next_id, payload: dict[str, Any], timeout: float = 30.0) -> dict[str, Any]:
+    msg_id = next_id()
+    body = dict(payload)
+    body["id"] = msg_id
+    ws.sock.settimeout(timeout)
+    ws.send_text(json.dumps(body))
+    while True:
+        msg = json.loads(ws.recv())
+        if msg.get("id") == msg_id:
+            return msg
+
+
+def rest_states(origin: str, token: str, tls_insecure: bool, entity_ids: list[str]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    headers = {"Authorization": "Bearer " + token}
+    for eid in entity_ids:
+        if not eid:
+            continue
+        url = origin.rstrip("/") + "/api/states/" + urllib.parse.quote(eid, safe="._")
+        try:
+            code, body = http_json("GET", url, tls_insecure=tls_insecure, headers=headers, timeout=8.0)
+        except Exception:
+            continue
+        if code == 200 and isinstance(body, dict):
+            out.append(body)
+    return out
+
+
 def mint_llat(ws, next_id) -> Optional[str]:
     msg_id = next_id()
     ws.send_text(json.dumps({
@@ -302,11 +356,79 @@ class HaSession:
         self.stop = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self.ha_version = ""
+        self.time_zone = ""
+        self.last_states: list[Any] = []
+        self.last_services: dict[str, list[str]] = {}
+        self._need_snapshot = False
+        self._snap_at = 0.0
         self.outbox: queue.Queue = queue.Queue()
+        self.waiters: dict[int, tuple[threading.Event, dict[str, Any]]] = {}
+        self._id_lock = threading.Lock()
 
     def next_id(self) -> int:
-        self.msg_id += 1
-        return self.msg_id
+        with self._id_lock:
+            self.msg_id += 1
+            return self.msg_id
+
+    def rpc(self, payload: dict[str, Any], timeout: float = 20.0) -> dict[str, Any]:
+        if self.stop.is_set():
+            return {"success": False, "error": {"code": "not_connected"}}
+        mid = self.next_id()
+        ev = threading.Event()
+        holder: dict[str, Any] = {}
+        with self._id_lock:
+            self.waiters[mid] = (ev, holder)
+        body = dict(payload)
+        body["id"] = mid
+        self.outbox.put(body)
+        if not ev.wait(timeout):
+            with self._id_lock:
+                self.waiters.pop(mid, None)
+            return {"success": False, "error": {"code": "timeout"}}
+        return holder.get("msg") or {"success": False, "error": {"code": "empty"}}
+
+    def fetch_energy(self) -> dict[str, Any]:
+        # Own short-lived WS so a 1 MiB get_states snapshot cannot starve prefs/stats.
+        ws = None
+        try:
+            ws, _ver = ws_auth(self.origin, self.token, self.tls_insecure)
+            n = [1]
+
+            def next_id() -> int:
+                n[0] += 1
+                return n[0]
+
+            cfg = ws_get_config(ws, next_id)
+            tz = str(cfg.get("time_zone") or self.time_zone or "")
+            prefs_msg = ws_call(ws, next_id, {"type": "energy/get_prefs"})
+            if not prefs_msg.get("success"):
+                err = prefs_msg.get("error") or {}
+                code = err.get("code") if isinstance(err, dict) else "prefs_failed"
+                return energy_lib.disabled(str(code or "prefs_failed"))
+            groups = energy_lib.parse_prefs(prefs_msg.get("result"))
+            if not groups:
+                return energy_lib.disabled("empty_prefs")
+            ids = groups["solar"] + groups["import"] + groups["export"]
+            if not ids:
+                return energy_lib.disabled("no_ids")
+            stats_msg = ws_call(ws, next_id, energy_lib.stats_payload(
+                energy_lib.local_midnight_iso(tz), ids))
+            if not stats_msg.get("success"):
+                err = stats_msg.get("error") or {}
+                code = err.get("code") if isinstance(err, dict) else "stats_failed"
+                return energy_lib.disabled(str(code or "stats_failed"))
+            states = self.last_states
+            if groups["power"]:
+                live = rest_states(self.origin, self.token, self.tls_insecure, groups["power"])
+                if live:
+                    states = live
+            return energy_lib.pack(groups, stats_msg.get("result") or {}, states)
+        finally:
+            if ws:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
 
     def start(self) -> None:
         self.thread = threading.Thread(target=self._run, name="hearth-%s" % self.instance_id, daemon=True)
@@ -332,7 +454,8 @@ class HaSession:
             except queue.Empty:
                 return
             body = dict(payload)
-            body["id"] = self.next_id()
+            if "id" not in body:
+                body["id"] = self.next_id()
             self.ws.send_text(json.dumps(body))
 
     def _run(self) -> None:
@@ -342,14 +465,22 @@ class HaSession:
                 self.ws, self.ha_version = ws_auth(self.origin, self.token, self.tls_insecure)
                 backoff = 1
                 cfg = ws_get_config(self.ws, self.next_id)
+                self.time_zone = str(cfg.get("time_zone") or "")
                 emit({
                     "event": "connection",
                     "instanceId": self.instance_id,
                     "state": "connected",
                     "haVersion": self.ha_version or cfg.get("version") or "",
                     "locationName": cfg.get("location_name") or "",
+                    "timeZone": self.time_zone,
                 })
-                self._snapshot()
+                self._snapshot(include_services=True)
+                for ev in ("state_changed", "entity_registry_updated", "area_registry_updated", "device_registry_updated"):
+                    self.ws.send_text(json.dumps({
+                        "id": self.next_id(),
+                        "type": "subscribe_events",
+                        "event_type": ev,
+                    }))
                 ping_at = time.monotonic() + 30
                 while not self.stop.is_set():
                     self.ws.sock.settimeout(0.2)
@@ -360,24 +491,41 @@ class HaSession:
                         if self.stop.is_set():
                             break
                         self._flush_outbox()
+                        if self._need_snapshot and time.monotonic() >= self._snap_at:
+                            self._need_snapshot = False
+                            self._snapshot(include_services=False)
                         if time.monotonic() >= ping_at:
                             self.call({"type": "ping"})
                             self._flush_outbox()
                             ping_at = time.monotonic() + 30
                         continue
                     msg = json.loads(raw)
-                    if msg.get("type") == "event" and (msg.get("event") or {}).get("event_type") == "state_changed":
-                        entity = ((msg.get("event") or {}).get("data") or {}).get("new_state")
-                        if entity:
-                            emit({
-                                "event": "state_changed",
-                                "instanceId": self.instance_id,
-                                "entity": {
-                                    "entity_id": entity.get("entity_id"),
-                                    "state": entity.get("state"),
-                                    "attributes": entity.get("attributes") or {},
-                                },
-                            })
+                    mid = msg.get("id")
+                    waiter = None
+                    if mid is not None:
+                        with self._id_lock:
+                            waiter = self.waiters.pop(mid, None)
+                    if waiter:
+                        waiter[1]["msg"] = msg
+                        waiter[0].set()
+                        continue
+                    if msg.get("type") == "event":
+                        et = (msg.get("event") or {}).get("event_type")
+                        if et == "state_changed":
+                            entity = ((msg.get("event") or {}).get("data") or {}).get("new_state")
+                            if entity:
+                                emit({
+                                    "event": "state_changed",
+                                    "instanceId": self.instance_id,
+                                    "entity": {
+                                        "entity_id": entity.get("entity_id"),
+                                        "state": entity.get("state"),
+                                        "attributes": entity.get("attributes") or {},
+                                    },
+                                })
+                        elif et in ("entity_registry_updated", "area_registry_updated", "device_registry_updated"):
+                            self._need_snapshot = True
+                            self._snap_at = time.monotonic() + 0.4
                     elif msg.get("type") == "pong":
                         ping_at = time.monotonic() + 30
             except WebSocketClosed as e:
@@ -392,19 +540,23 @@ class HaSession:
             backoff = min(30, backoff * 2 if backoff >= 2 else (2 if backoff == 1 else 5))
         emit({"event": "connection", "instanceId": self.instance_id, "state": "disconnected"})
 
-    def _snapshot(self) -> None:
+    def _snapshot(self, include_services: bool = True) -> None:
         if not self.ws:
             return
         areas = []
         devices = []
         entities = []
         states = []
-        for typ, dest in (
+        services: dict[str, list[str]] = dict(self.last_services)
+        types = [
             ("config/area_registry/list", "areas"),
             ("config/device_registry/list", "devices"),
             ("config/entity_registry/list", "entities"),
             ("get_states", "states"),
-        ):
+        ]
+        if include_services:
+            types.append(("get_services", "services"))
+        for typ, dest in types:
             mid = self.next_id()
             self.ws.send_text(json.dumps({"id": mid, "type": typ}))
             while True:
@@ -416,9 +568,13 @@ class HaSession:
                         devices = msg.get("result") or []
                     elif dest == "entities":
                         entities = msg.get("result") or []
+                    elif dest == "services":
+                        services = slim_services(msg.get("result") or {})
                     else:
                         states = msg.get("result") or []
                     break
+        self.last_states = states if isinstance(states, list) else []
+        self.last_services = services if isinstance(services, dict) else {}
         path = os.path.join(CACHE_DIR, "%s.json" % self.instance_id)
         payload = {
             "instanceId": self.instance_id,
@@ -426,6 +582,7 @@ class HaSession:
             "devices": devices,
             "entities": entities[:5000],
             "states": states[:5000],
+            "services": services,
         }
         atomic_write(path, json.dumps(payload), 0o600)
         emit({
@@ -435,11 +592,7 @@ class HaSession:
             "entityCount": min(len(states), 5000),
             "areaCount": len(areas),
         })
-        self.ws.send_text(json.dumps({
-            "id": self.next_id(),
-            "type": "subscribe_events",
-            "event_type": "state_changed",
-        }))
+        # extra registry subscriptions happen once after first snapshot in _run
 
 
 def cmd_providers(cmd: dict[str, Any]) -> dict[str, Any]:
@@ -651,6 +804,25 @@ def cmd_list_secrets(_cmd: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "data": {"ids": ids}}
 
 
+def cmd_energy(cmd: dict[str, Any]) -> dict[str, Any] | None:
+    instance_id = str(cmd.get("instanceId") or "")
+    cid = cmd.get("id")
+    with lock:
+        sess = sessions.get(instance_id)
+    if not sess:
+        return {"ok": True, "data": energy_lib.disabled("not_connected")}
+
+    def work() -> None:
+        try:
+            data = sess.fetch_energy()
+        except Exception as e:
+            data = energy_lib.disabled(str(e))
+        emit({"event": "result", "id": cid, "ok": True, "data": redact(data)})
+
+    threading.Thread(target=work, name="hearth-energy", daemon=True).start()
+    return None
+
+
 HANDLERS = {
     "providers": cmd_providers,
     "login": cmd_login,
@@ -659,8 +831,9 @@ HANDLERS = {
     "disconnect": cmd_disconnect,
     "call": cmd_call,
     "listSecrets": cmd_list_secrets,
-    "energy": lambda c: {"ok": True, "data": {"skipped": True}},
+    "energy": cmd_energy,
 }
+
 
 
 def handle(cmd: dict[str, Any]) -> None:
@@ -675,6 +848,8 @@ def handle(cmd: dict[str, Any]) -> None:
     except Exception as e:
         log("error", str(e))
         emit({"event": "result", "id": cid, "ok": False, "error": str(e)})
+        return
+    if result is None:
         return
     out = {"event": "result", "id": cid, "ok": bool(result.get("ok"))}
     if "error" in result:

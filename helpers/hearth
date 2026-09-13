@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Hearth CLI for Super-space actions. Invoke by absolute path from the menu."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+import menu_sync
+
+HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
+HOME = os.environ.get("HOME", "")
+CONFIG_PATH = os.path.join(HOME, ".config", "omarchy", "hearth", "config.json")
+SECRETS_PATH = os.path.join(HOME, ".config", "omarchy", "hearth", "secrets.json")
+CACHE_DIR = os.path.join(HOME, ".cache", "omarchy", "hearth")
+PENDING_ROOM = os.path.join(CACHE_DIR, "pending-room")
+CLI = os.path.join(HERE, "hearth")
+
+TOGGLE = {"light", "switch", "fan", "input_boolean", "siren"}
+ACTIVATE = {"scene", "script", "automation"}
+PRESS = {"button", "input_button"}
+
+
+def usage() -> int:
+    sys.stderr.write(
+        "Usage: hearth status|act <entity_id> [service]|favorite <entity_id>|"
+        "instance <id>|onboard|open [--room id]|menu-sync|uninstall-menu\n"
+    )
+    return 2
+
+
+def read_json(path: str, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else default
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def domain_of(entity_id: str) -> str:
+    return entity_id.split(".", 1)[0] if "." in entity_id else ""
+
+
+def primary_service(entity_id: str, service: str) -> str:
+    if service:
+        return service
+    domain = domain_of(entity_id)
+    if domain in TOGGLE:
+        return "toggle"
+    if domain in PRESS:
+        return "press"
+    if domain in ACTIVATE:
+        return "turn_on"
+    if domain == "lock":
+        return "unlock"
+    if domain == "cover":
+        return "open_cover"
+    if domain == "media_player":
+        return "media_play_pause"
+    if domain == "vacuum":
+        return "start"
+    return "toggle"
+
+
+def ipc(method: str, *args: str) -> tuple[int, str]:
+    cmd = ["omarchy-shell", "hearth", method, *args]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+    except FileNotFoundError:
+        return 127, "omarchy-shell is not running"
+    except subprocess.TimeoutExpired:
+        return 124, "ipc timeout"
+    out = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+    if proc.returncode != 0 and "not running" in (proc.stderr or "").lower():
+        return proc.returncode, "omarchy-shell is not running"
+    return proc.returncode, out
+
+
+def shell_running() -> bool:
+    code, _ = ipc("ping")
+    return code == 0
+
+
+def rest_act(entity_id: str, service: str) -> dict:
+    cfg = read_json(CONFIG_PATH, {})
+    secrets = read_json(SECRETS_PATH, {})
+    iid = str(cfg.get("activeInstanceId") or "")
+    inst = None
+    for row in cfg.get("instances") or []:
+        if isinstance(row, dict) and str(row.get("id")) == iid:
+            inst = row
+            break
+    rec = (secrets.get("instances") or {}).get(iid) or {}
+    token = rec.get("accessToken") or rec.get("access_token")
+    origin = (inst or {}).get("url") or ""
+    if not token or not origin:
+        return {"ok": False, "error": "No saved instance token."}
+    domain = domain_of(entity_id)
+    url = origin.rstrip("/") + "/api/services/%s/%s" % (domain, service)
+    req = urllib.request.Request(
+        url,
+        data=json.dumps({"entity_id": entity_id}).encode("utf-8"),
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+        method="POST",
+    )
+    ctx = None
+    try:
+        with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
+            raw = resp.read()
+            code = resp.getcode()
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "error": "HTTP %s" % e.code}
+    except urllib.error.URLError as e:
+        return {"ok": False, "error": str(e.reason)}
+    return {"ok": 200 <= code < 300, "http": code, "body": raw.decode("utf-8", "replace")[:500]}
+
+
+def cmd_status() -> int:
+    if shell_running():
+        code, out = ipc("status")
+        sys.stdout.write((out or "{}") + "\n")
+        return 0 if code == 0 else 1
+    cfg = read_json(CONFIG_PATH, {})
+    sys.stdout.write(json.dumps({
+        "configured": bool(cfg.get("instances")),
+        "connected": False,
+        "activeInstanceId": cfg.get("activeInstanceId") or "",
+        "fallback": "rest",
+    }) + "\n")
+    return 0
+
+
+def cmd_act(entity_id: str, service: str) -> int:
+    if not entity_id or not re_entity(entity_id):
+        sys.stderr.write("Bad entity id.\n")
+        return 1
+    svc = primary_service(entity_id, service)
+    payload = json.dumps({"entity_id": entity_id, "service": svc})
+    if shell_running():
+        code, out = ipc("act", payload)
+        sys.stdout.write((out or "") + "\n")
+        return 0 if code == 0 else 1
+    result = rest_act(entity_id, svc)
+    sys.stdout.write(json.dumps(result) + "\n")
+    return 0 if result.get("ok") else 1
+
+
+def re_entity(entity_id: str) -> bool:
+    return bool(re.match(r"^[a-z0-9_]+\.[a-z0-9_]+$", entity_id))
+
+
+def cmd_favorite(entity_id: str) -> int:
+    if not re_entity(entity_id):
+        sys.stderr.write("Bad entity id.\n")
+        return 1
+    code, out = ipc("toggleFavorite", json.dumps({"entity_id": entity_id}))
+    sys.stdout.write((out or "") + "\n")
+    return 0 if code == 0 else 1
+
+
+def cmd_instance(instance_id: str) -> int:
+    cfg = read_json(CONFIG_PATH, {"version": 1, "instances": [], "activeInstanceId": ""})
+    cfg["activeInstanceId"] = instance_id
+    os.makedirs(os.path.dirname(CONFIG_PATH), mode=0o700, exist_ok=True)
+    tmp = CONFIG_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, CONFIG_PATH)
+    if shell_running():
+        ipc("setActive", instance_id)
+        ipc("reload")
+    return 0
+
+
+def cmd_open(room: str) -> int:
+    if room:
+        os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
+        with open(PENDING_ROOM, "w", encoding="utf-8") as f:
+            f.write(room.strip() + "\n")
+    subprocess.run(["omarchy-shell", "shell", "summon", "hearth"], check=False)
+    return 0
+
+
+def cmd_onboard() -> int:
+    return cmd_open("")
+
+
+def cmd_menu_sync() -> int:
+    result = menu_sync.sync(cli=CLI)
+    sys.stdout.write(json.dumps(result) + "\n")
+    return 0 if result.get("ok") else 1
+
+
+def cmd_uninstall() -> int:
+    result = menu_sync.uninstall()
+    sys.stdout.write(json.dumps(result) + "\n")
+    return 0 if result.get("ok") else 1
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        return usage()
+    cmd = argv[0]
+    if cmd in ("-h", "--help", "help"):
+        return usage()
+    if cmd == "status":
+        return cmd_status()
+    if cmd == "act":
+        if len(argv) < 2:
+            return usage()
+        return cmd_act(argv[1], argv[2] if len(argv) > 2 else "")
+    if cmd == "favorite":
+        if len(argv) < 2:
+            return usage()
+        return cmd_favorite(argv[1])
+    if cmd == "instance":
+        if len(argv) < 2:
+            return usage()
+        return cmd_instance(argv[1])
+    if cmd == "onboard":
+        return cmd_onboard()
+    if cmd == "open":
+        room = ""
+        if len(argv) >= 3 and argv[1] == "--room":
+            room = argv[2]
+        elif len(argv) >= 2 and argv[1].startswith("--room="):
+            room = argv[1].split("=", 1)[1]
+        return cmd_open(room)
+    if cmd == "menu-sync":
+        return cmd_menu_sync()
+    if cmd == "uninstall-menu":
+        return cmd_uninstall()
+    return usage()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
