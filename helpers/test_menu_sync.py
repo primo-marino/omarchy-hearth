@@ -73,6 +73,9 @@ class MenuSyncTests(unittest.TestCase):
             self.assertEqual(data["hearth"]["label"], "Hearth")
             self.assertNotIn("//", open(path).read())
 
+    def test_hearth_key_does_not_eat_hearthside(self):
+        self.assertFalse(menu_sync.is_hearth_key("hearthside"))
+
     def test_uninstall_drops_hearth_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "omarchy-menu.jsonc")

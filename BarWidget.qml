@@ -79,7 +79,8 @@ BarWidget {
     onPressed: function(b) {
       if (!root.bar) return
       if (b === Qt.RightButton) {
-        root.bar.run("omarchy-notification-send Hearth")
+        if (root.svc) root.svc.showSettings = true
+        root.togglePanel()
       } else if (b === Qt.MiddleButton) {
         root.refresh()
       } else {

@@ -90,12 +90,6 @@ Item {
   }
   readonly property string statusText: configured ? (activeName + " · " + connectionState) : "Hearth — not connected"
 
-  function fileUrlToPath(url) {
-    var s = String(url || "")
-    if (s.indexOf("file://") === 0) s = s.substring(7)
-    return s
-  }
-
   function nextId() {
     root._cmdId += 1
     return root._cmdId
@@ -273,6 +267,8 @@ Item {
     var rec = pa[eid]
     if (rec && rec.kind === "toggle")
       root.rooms = Entities.optimisticToggle(root.rooms, eid)
+    if (rec && rec.kind === "fan" && rec.prevIdx !== undefined)
+      root.rooms = Entities.optimisticFan(root.rooms, eid, rec.prevIdx)
     root.rooms = Entities.setPending(root.rooms, eid, false, err || "Call failed.")
     delete pa[eid]
     root.pendingActs = pa
@@ -286,7 +282,8 @@ Item {
     var stale = []
     for (var k in pa) {
       if (!Object.prototype.hasOwnProperty.call(pa, k) || !pa[k]) continue
-      if (now - pa[k].at >= 2000) stale.push(k)
+      var ttl = pa[k].ttl || 2000
+      if (now - pa[k].at >= ttl) stale.push(k)
     }
     for (var i = 0; i < stale.length; i++) root.failAct(stale[i], "No response")
   }
@@ -349,7 +346,7 @@ Item {
     var svc = serviceName || Entities.primaryService(domain, kind, found ? found.state : "")
     if (!svc || !root.config.activeInstanceId) return { ok: false, error: "Nothing to call." }
     var pa = root.pendingActs
-    pa[eid] = { kind: kind, at: Date.now() }
+    pa[eid] = { kind: kind, at: Date.now(), ttl: kind === "toggle" ? 2000 : 16000 }
     root.pendingActs = pa
     root.pendingWatch = true
     if (kind === "toggle") {
@@ -362,6 +359,8 @@ Item {
         percentage: pct,
         percentage_step: found && found.attrs ? found.attrs.percentage_step : undefined
       })
+      pa[eid] = { kind: kind, at: Date.now(), ttl: 16000, prevIdx: found ? Entities.fanSpeedIndex(found.state, found.attrs) : 0 }
+      root.pendingActs = pa
       root.rooms = Entities.optimisticFan(root.rooms, eid, idx)
       root.refreshLists()
     }
@@ -599,6 +598,7 @@ Item {
     if (!Config.findInstance(config, id)) return JSON.stringify({ ok: false, error: "Unknown instance." })
     var prev = String(config.activeInstanceId || "")
     var next = String(id)
+    if (prev === next) return JSON.stringify({ ok: true, skipped: "same" })
     if (prev && prev !== next) sendCmd({ cmd: "disconnect", instanceId: prev }, null)
     config.activeInstanceId = next
     writeConfig()
@@ -660,9 +660,7 @@ Item {
   function menuSyncNow() {
     var tree = MenuSync.build(root.config, root.state, root.rooms, root.cliPath, root.connected)
     menuTreeFile.setText(JSON.stringify(tree, null, 2) + "\n")
-    menuProc.command = ["python3", root.cliPath, "menu-sync"]
-    menuProc.running = false
-    menuProc.running = true
+    menuRun.restart()
     return JSON.stringify({ ok: true, pending: true })
   }
 
@@ -697,6 +695,33 @@ Item {
     interval: 250
     repeat: false
     onTriggered: root.menuSyncNow()
+  }
+
+  Timer {
+    id: menuRun
+    interval: 120
+    repeat: false
+    onTriggered: {
+      menuProc.command = ["python3", root.cliPath, "menu-sync"]
+      menuProc.running = false
+      menuProc.running = true
+    }
+  }
+
+  Timer {
+    id: midnightEnergy
+    interval: 60000
+    repeat: true
+    running: root.configured
+    property string firedDay: ""
+    onTriggered: {
+      var d = new Date()
+      if (d.getHours() !== 0 || d.getMinutes() > 3) return
+      var key = d.toDateString()
+      if (midnightEnergy.firedDay === key) return
+      midnightEnergy.firedDay = key
+      root.refreshEnergy(true)
+    }
   }
 
   Process {

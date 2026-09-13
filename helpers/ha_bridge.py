@@ -436,6 +436,12 @@ class HaSession:
 
     def disconnect(self) -> None:
         self.stop.set()
+        with self._id_lock:
+            pending = list(self.waiters.items())
+            self.waiters.clear()
+        for _mid, (ev, holder) in pending:
+            holder["msg"] = {"success": False, "error": {"code": "disconnected"}}
+            ev.set()
         if self.ws:
             try:
                 self.ws.close()
@@ -560,8 +566,19 @@ class HaSession:
             mid = self.next_id()
             self.ws.send_text(json.dumps({"id": mid, "type": typ}))
             while True:
+                self._flush_outbox()
                 msg = json.loads(self.ws.recv())
-                if msg.get("id") == mid:
+                got = msg.get("id")
+                if got != mid:
+                    waiter = None
+                    if got is not None:
+                        with self._id_lock:
+                            waiter = self.waiters.pop(got, None)
+                    if waiter:
+                        waiter[1]["msg"] = msg
+                        waiter[0].set()
+                    continue
+                if got == mid:
                     if dest == "areas":
                         areas = msg.get("result") or []
                     elif dest == "devices":
@@ -795,8 +812,12 @@ def cmd_call(cmd: dict[str, Any]) -> dict[str, Any]:
     payload = cmd.get("payload") or {}
     if not isinstance(payload, dict):
         return {"ok": False, "error": "bad payload"}
-    sess.call(payload)
-    return {"ok": True}
+    msg = sess.rpc(payload, timeout=15.0)
+    if not msg.get("success"):
+        err = msg.get("error") or {}
+        text = err.get("message") if isinstance(err, dict) else str(err or "call failed")
+        return {"ok": False, "error": text or "call failed"}
+    return {"ok": True, "data": msg.get("result")}
 
 
 def cmd_list_secrets(_cmd: dict[str, Any]) -> dict[str, Any]:

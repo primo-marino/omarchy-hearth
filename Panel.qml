@@ -16,6 +16,8 @@ Panel {
   property bool cursorActive: false
   property string tab: "rooms"
   property string focusedEntityId: ""
+  property bool filterOpen: false
+  property string filterQuery: ""
 
   readonly property var barIdentity: hostWidget || root
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -110,6 +112,11 @@ Panel {
   }
 
   function handleClose() {
+    if (root.filterOpen) {
+      root.filterOpen = false
+      root.filterQuery = ""
+      return
+    }
     if (root.addingInstance && service && service.cancelOnboard) {
       service.cancelOnboard()
       return
@@ -161,13 +168,40 @@ Panel {
       blocked: {
         if (onboardLoader.item && onboardLoader.item.fieldFocused === true) return true
         if (settingsPage.visible && settingsPage.fieldFocused === true) return true
+        if (filterField.visible && filterField.activeFocus) return true
         return false
       }
       onCloseRequested: root.handleClose()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onMoveRequested: function(dx, dy) {
+        if (root.tab === "rooms" && roomList.moveCursor) roomList.moveCursor(dy)
+        else {
+          var n = root.tabEntities.length
+          if (n <= 0) return
+          var idx = 0
+          for (var i = 0; i < n; i++) if (root.tabEntities[i].entity_id === root.focusedEntityId) idx = i
+          idx += dy
+          if (idx < 0) idx = 0
+          if (idx >= n) idx = n - 1
+          root.focusedEntityId = root.tabEntities[idx].entity_id
+        }
+      }
+      onActivateRequested: {
+        if (root.tab === "rooms" && roomList.activateCursor) roomList.activateCursor()
+        else {
+          var list = root.tabEntities || []
+          for (var i = 0; i < list.length; i++) {
+            if (list[i].entity_id === root.focusedEntityId && service && service.actOnEntity)
+              service.actOnEntity(list[i].entity_id, list[i].service)
+          }
+        }
+      }
       onTextKey: function(t) {
         if (!root.configured) return
-        if (t === "r" || t === "R") root.refresh()
+        if (t === "/") {
+          root.filterOpen = true
+          Qt.callLater(function() { if (filterField.forceActiveFocus) filterField.forceActiveFocus() })
+        } else if (t === "r" || t === "R") root.refresh()
         else if (t === "s" || t === "S") {
           if (service) service.showSettings = !service.showSettings
         } else if (t === "f" || t === "F") root.toggleFocusedFavorite()
@@ -268,6 +302,8 @@ Panel {
               foreground: root.foreground
               fontFamily: root.fontFamily
               onChanged: function(v) {
+                var cur = service && service.config ? String(service.config.activeInstanceId || "") : ""
+                if (String(v) === cur) return
                 if (service && service.setActiveId) service.setActiveId(v)
               }
             }
@@ -285,6 +321,25 @@ Panel {
             energy: service && service.energy ? service.energy : ({})
             foreground: root.foreground
             fontFamily: root.fontFamily
+          }
+
+          TextField {
+            id: filterField
+            visible: root.filterOpen && !root.showSettings
+            width: parent.width
+            placeholderText: "Filter rooms and devices"
+            text: root.filterQuery
+            foreground: root.foreground
+            onTextChanged: root.filterQuery = text
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Escape) {
+                root.filterOpen = false
+                root.filterQuery = ""
+                text = ""
+                keyCatcher.forceActiveFocus()
+                event.accepted = true
+              }
+            }
           }
 
           ButtonGroup {
@@ -360,6 +415,7 @@ Panel {
                 width: parent.width
                 service: root.service
                 bar: root.bar
+                query: root.filterQuery
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onEntityTouched: function(entityId) { root.focusedEntityId = entityId }

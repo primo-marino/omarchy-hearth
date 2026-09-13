@@ -124,6 +124,21 @@ Item {
         onClicked: root.run("toggle")
       }
 
+      PanelSlider {
+        visible: root.kind === "toggle" && root.domain === "light" && attrs.brightness !== undefined && attrs.brightness !== null
+        width: parent.width
+        enabled: !root.unavailable
+        bar: root.bar
+        value: Math.max(0, Math.min(255, Number(attrs.brightness) || 0))
+        minimum: 0
+        maximum: 255
+        integer: true
+        onReleased: function(v) {
+          if (v <= 0) root.run("turn_off")
+          else root.run("turn_on", { brightness: Math.round(v) })
+        }
+      }
+
       Column {
         visible: root.kind === "fan" && root.fanSpeeds
         width: parent.width
@@ -150,7 +165,10 @@ Item {
           fontFamily: root.fontFamily
           value: root.fanValue
           options: root.fanOptions
-          onChanged: function(v) { root.setFan(v) }
+          onChanged: function(v) {
+            if (String(v) === root.fanValue) return
+            root.setFan(v)
+          }
         }
       }
 

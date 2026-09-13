@@ -104,7 +104,25 @@ function build(config, state, rooms, cli, connected) {
     var cap = Math.min(ents.length, 40)
     for (var e = 0; e < cap; e++) {
       if (!ents[e] || !ents[e].entity_id) continue
-      tree[rkey + "." + entitySeg(ents[e].entity_id)] = leaf(path, ents[e])
+      var ekey = rkey + "." + entitySeg(ents[e].entity_id)
+      var step = Number(ents[e].attrs && ents[e].attrs.percentage_step)
+      if (ents[e].kind === "fan" && isFinite(step) && step > 0) {
+        var speeds = Math.round(100 / step)
+        if (speeds < 1) speeds = 1
+        if (speeds > 6) speeds = 6
+        tree[ekey] = { icon: actIcon(ents[e]), label: actLabel(ents[e]) }
+        tree[ekey + ".off"] = { icon: "󰈐", label: "Off", action: path + " act " + ents[e].entity_id + " turn_off" }
+        for (var sp = 1; sp <= speeds; sp++) {
+          var pct = sp >= speeds ? 100 : Math.round(sp * step)
+          tree[ekey + "." + sp] = {
+            icon: "󰈐",
+            label: "Speed " + sp,
+            action: path + " act " + ents[e].entity_id + " set_percentage " + pct
+          }
+        }
+      } else {
+        tree[ekey] = leaf(path, ents[e])
+      }
     }
     if (ents.length > 40) {
       tree[rkey + ".more"] = {

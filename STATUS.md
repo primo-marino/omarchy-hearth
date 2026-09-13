@@ -28,6 +28,8 @@ Hearth is **installed and enabled** on this Omarchy session.
 
 See [TESTPLAN.md](TESTPLAN.md). Office fan `fan.0x881a14fffe41c112` (Off + 3 speeds) and HA rename are called out there.
 
+Bug scrub (post-0.1.0): HA `call_service` waits for result; fan revert; instance dropdown no longer reconnects the same house; menu-sync waits for the tree file; `/` filter; `j`/`k` cursor; light brightness slider; Super-space fan Off/1/2/3; energy refresh at midnight; waiters cleared on disconnect.
+
 After `omarchy restart shell`, you should not need further code drops for the review.
 
 ## Commands

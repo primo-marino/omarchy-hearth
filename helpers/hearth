@@ -61,6 +61,8 @@ def primary_service(entity_id: str, service: str) -> str:
         return "unlock"
     if domain == "cover":
         return "open_cover"
+    if domain == "fan":
+        return "set_percentage"
     if domain == "media_player":
         return "media_play_pause"
     if domain == "vacuum":
@@ -87,7 +89,7 @@ def shell_running() -> bool:
     return code == 0
 
 
-def rest_act(entity_id: str, service: str) -> dict:
+def rest_act(entity_id: str, service: str, data: dict | None = None) -> dict:
     cfg = read_json(CONFIG_PATH, {})
     secrets = read_json(SECRETS_PATH, {})
     iid = str(cfg.get("activeInstanceId") or "")
@@ -105,7 +107,7 @@ def rest_act(entity_id: str, service: str) -> dict:
     url = origin.rstrip("/") + "/api/services/%s/%s" % (domain, service)
     req = urllib.request.Request(
         url,
-        data=json.dumps({"entity_id": entity_id}).encode("utf-8"),
+        data=json.dumps(dict({"entity_id": entity_id}, **(data or {}))).encode("utf-8"),
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
         method="POST",
     )
@@ -136,17 +138,41 @@ def cmd_status() -> int:
     return 0
 
 
-def cmd_act(entity_id: str, service: str) -> int:
+def parse_act_data(service: str, extra: str) -> dict | None:
+    if not extra:
+        return None
+    try:
+        parsed = json.loads(extra)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    try:
+        number = float(extra)
+    except ValueError:
+        return None
+    if service == "set_percentage":
+        return {"percentage": number}
+    if service in ("turn_on", "set_brightness"):
+        return {"brightness": int(number)}
+    return None
+
+
+def cmd_act(entity_id: str, service: str, extra: str = "") -> int:
     if not entity_id or not re_entity(entity_id):
         sys.stderr.write("Bad entity id.\n")
         return 1
     svc = primary_service(entity_id, service)
-    payload = json.dumps({"entity_id": entity_id, "service": svc})
+    data = parse_act_data(svc, extra)
+    payload_obj = {"entity_id": entity_id, "service": svc}
+    if data:
+        payload_obj["service_data"] = data
+    payload = json.dumps(payload_obj)
     if shell_running():
         code, out = ipc("act", payload)
         sys.stdout.write((out or "") + "\n")
         return 0 if code == 0 else 1
-    result = rest_act(entity_id, svc)
+    result = rest_act(entity_id, svc, data)
     sys.stdout.write(json.dumps(result) + "\n")
     return 0 if result.get("ok") else 1
 
@@ -215,7 +241,7 @@ def main(argv: list[str]) -> int:
     if cmd == "act":
         if len(argv) < 2:
             return usage()
-        return cmd_act(argv[1], argv[2] if len(argv) > 2 else "")
+        return cmd_act(argv[1], argv[2] if len(argv) > 2 else "", argv[3] if len(argv) > 3 else "")
     if cmd == "favorite":
         if len(argv) < 2:
             return usage()

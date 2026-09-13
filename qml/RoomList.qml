@@ -11,8 +11,26 @@ Column {
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
   property string openAreaId: ""
+  property string query: ""
+  property int cursorIndex: 0
   readonly property color dim: Qt.darker(foreground, 1.55)
-  readonly property var rooms: service && service.rooms ? service.rooms : []
+  readonly property var rooms: {
+    var all = service && service.rooms ? service.rooms : []
+    var q = String(query || "").toLowerCase()
+    if (!q) return all
+    var out = []
+    for (var i = 0; i < all.length; i++) {
+      var r = all[i]
+      var name = String(r.name || r.area_id || "").toLowerCase()
+      if (name.indexOf(q) !== -1) { out.push(r); continue }
+      var ents = r.entities || []
+      for (var j = 0; j < ents.length; j++) {
+        var en = String(ents[j].name || ents[j].entity_id || "").toLowerCase()
+        if (en.indexOf(q) !== -1) { out.push(r); break }
+      }
+    }
+    return out
+  }
   readonly property var openRoom: {
     if (!openAreaId) return null
     for (var i = 0; i < rooms.length; i++)
@@ -22,7 +40,42 @@ Column {
 
   signal entityTouched(string entityId)
 
-  function goBack() { openAreaId = "" }
+  function goBack() { openAreaId = ""; cursorIndex = 0 }
+
+  function visibleEntities() {
+    var ents = openRoom ? (openRoom.entities || []) : []
+    var q = String(query || "").toLowerCase()
+    if (!q) return ents
+    var out = []
+    for (var i = 0; i < ents.length; i++) {
+      var en = String(ents[i].name || ents[i].entity_id || "").toLowerCase()
+      if (en.indexOf(q) !== -1) out.push(ents[i])
+    }
+    return out
+  }
+
+  function moveCursor(dy) {
+    var n = openRoom ? visibleEntities().length : rooms.length
+    if (n <= 0) { cursorIndex = 0; return }
+    var next = cursorIndex + dy
+    if (next < 0) next = 0
+    if (next >= n) next = n - 1
+    cursorIndex = next
+  }
+
+  function activateCursor() {
+    if (!openRoom) {
+      if (rooms[cursorIndex]) openAreaId = rooms[cursorIndex].area_id
+      cursorIndex = 0
+      return
+    }
+    var ents = visibleEntities()
+    var row = ents[cursorIndex]
+    if (!row || !service || !service.actOnEntity) return
+    entityTouched(row.entity_id || "")
+    if (row.kind === "fan") return
+    service.actOnEntity(row.entity_id, row.service)
+  }
 
   Text {
     visible: rooms.length === 0
@@ -38,8 +91,10 @@ Column {
     model: openRoom ? [] : rooms
     Button {
       required property var modelData
+      required property int index
       width: root.width
       text: modelData.name + (modelData.count ? ("  ·  " + modelData.count) : "")
+      selected: !openRoom && root.cursorIndex === index
       foreground: root.foreground
       onClicked: root.openAreaId = modelData.area_id
     }
@@ -61,16 +116,31 @@ Column {
     }
 
     Repeater {
-      model: openRoom ? openRoom.entities : []
+      model: {
+        var ents = openRoom ? (openRoom.entities || []) : []
+        var q = String(root.query || "").toLowerCase()
+        if (!q) return ents
+        var out = []
+        for (var i = 0; i < ents.length; i++) {
+          var en = String(ents[i].name || ents[i].entity_id || "").toLowerCase()
+          if (en.indexOf(q) !== -1) out.push(ents[i])
+        }
+        return out
+      }
       EntityRow {
         required property var modelData
+        required property int index
         width: root.width
         entity: modelData
         service: root.service
         bar: root.bar
         foreground: root.foreground
         fontFamily: root.fontFamily
-        onTouched: root.entityTouched(modelData.entity_id || "")
+        opacity: openRoom && root.cursorIndex === index ? 1 : 0.92
+        onTouched: {
+          root.cursorIndex = index
+          root.entityTouched(modelData.entity_id || "")
+        }
       }
     }
   }
