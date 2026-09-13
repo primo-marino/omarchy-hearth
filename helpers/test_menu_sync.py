@@ -76,6 +76,30 @@ class MenuSyncTests(unittest.TestCase):
     def test_hearth_key_does_not_eat_hearthside(self):
         self.assertFalse(menu_sync.is_hearth_key("hearthside"))
 
+    def test_user_edit_still_merges_hearth_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            etag = os.path.join(tmp, "etag")
+            menu_sync.sync(
+                tree={"hearth": {"label": "Hearth"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=etag,
+            )
+            data = json.loads(open(path).read())
+            data["personal.notes"] = {"label": "Notes"}
+            open(path, "w").write(json.dumps(data, indent=2) + "\n")
+            result = menu_sync.sync(
+                tree={"hearth": {"label": "Hearth"}, "hearth.open": {"label": "Open", "action": "x"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=etag,
+            )
+            self.assertTrue(result.get("ok"))
+            merged = json.loads(open(path).read())
+            self.assertEqual(merged["personal.notes"]["label"], "Notes")
+            self.assertIn("hearth.open", merged)
+
     def test_uninstall_drops_hearth_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "omarchy-menu.jsonc")

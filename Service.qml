@@ -165,25 +165,28 @@ Item {
     if (msg.event === "snapshot") {
       snapFile.reload()
       Qt.callLater(function() { root.applySnapshot(snapFile.text()) })
-      root.refreshEnergy(true)
+      if (String(msg.reason || "") !== "registry") root.refreshEnergy(true)
       return
     }
     if (msg.event === "state_changed" && msg.entity) {
       var eid = String(msg.entity.entity_id || "")
-      root.rooms = Entities.patch(root.rooms, msg.entity)
-      if (eid && root.pendingActs[eid]) {
-        var rec = root.pendingActs[eid]
-        var nextPending = root.pendingActs
-        delete nextPending[eid]
-        root.pendingActs = nextPending
-        root.pendingWatch = root.hasPendingActs()
-        if (rec && rec.kind === "toggle") root.recordRecent(eid)
+      var tracked = !!Entities.findEntity(root.rooms, eid)
+      if (tracked) {
+        root.rooms = Entities.patch(root.rooms, msg.entity)
+        if (eid && root.pendingActs[eid]) {
+          var rec = root.pendingActs[eid]
+          var nextPending = root.pendingActs
+          delete nextPending[eid]
+          root.pendingActs = nextPending
+          root.pendingWatch = root.hasPendingActs()
+          if (rec && rec.kind === "toggle") root.recordRecent(eid)
+        }
+        root.refreshLists(false)
       }
       if (EnergyJs.isPowerEntity(root.energy, eid)) {
         var w = EnergyJs.toWatts(msg.entity.state, msg.entity.attributes)
         if (isFinite(w)) root.patchEnergyPower(w)
       }
-      root.refreshLists()
     }
   }
 
@@ -226,19 +229,21 @@ Item {
     return Config.instanceState(root.state, root.config.activeInstanceId).favorites
   }
 
-  function refreshLists() {
+  function refreshLists(syncMenu) {
     var inst = Config.instanceState(root.state, root.config.activeInstanceId)
     root.rooms = Entities.markFavorites(root.rooms, inst.favorites)
     root.bumpRooms()
     root.favoriteEntities = Entities.favoritesList(root.rooms, inst.favorites)
     root.recentEntities = Entities.recentsList(root.rooms, inst.recents)
     root.lightsOn = Entities.lightsOnCount(root.rooms)
-    root.scheduleMenuSync()
+    if (syncMenu !== false) root.scheduleMenuSync()
   }
 
   function applySnapshot(raw) {
     var snap
     try { snap = JSON.parse(String(raw || "{}")) } catch (e) { return }
+    if (!snap || typeof snap !== "object") return
+    if (!snap.states && !snap.areas && !snap.entities) return
     var areas = []
     var rawAreas = snap.areas || []
     for (var i = 0; i < rawAreas.length; i++) {

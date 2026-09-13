@@ -131,15 +131,8 @@ def sync(tree: Optional[dict[str, Any]] = None, cli: str = "", menu_path: str = 
         return {"ok": False, "error": "parse_failed", "wrote": False}
 
     now = time.time()
-    try:
-        mtime = os.path.getmtime(menu_path)
-    except OSError:
-        mtime = 0
-    last_write = float(etag.get("writtenAt") or 0)
     last_file = str(etag.get("fileHash") or "")
     current_hash = file_sha(raw)
-    if last_write and mtime > last_write + 2 and current_hash and current_hash != last_file:
-        return {"ok": True, "skipped": "user_edit", "wrote": False}
     if etag.get("treeHash") == tree_hash and current_hash == last_file:
         return {"ok": True, "skipped": "etag", "wrote": False}
 

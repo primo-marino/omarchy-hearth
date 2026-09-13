@@ -21,7 +21,7 @@ CACHE_DIR = os.path.join(HOME, ".cache", "omarchy", "hearth")
 PENDING_ROOM = os.path.join(CACHE_DIR, "pending-room")
 CLI = os.path.join(HERE, "hearth")
 
-TOGGLE = {"light", "switch", "fan", "input_boolean", "siren"}
+TOGGLE = {"light", "switch", "input_boolean", "siren"}
 ACTIVATE = {"scene", "script", "automation"}
 PRESS = {"button", "input_button"}
 
@@ -62,7 +62,7 @@ def primary_service(entity_id: str, service: str) -> str:
     if domain == "cover":
         return "open_cover"
     if domain == "fan":
-        return "set_percentage"
+        return "toggle"
     if domain == "media_player":
         return "media_play_pause"
     if domain == "vacuum":

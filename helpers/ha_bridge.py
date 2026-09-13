@@ -466,7 +466,10 @@ class HaSession:
             body = dict(payload)
             if "id" not in body:
                 body["id"] = self.next_id()
-            self.ws.send_text(json.dumps(body))
+            try:
+                self.ws.send_text(json.dumps(body))
+            except OSError:
+                return
 
     def _run(self) -> None:
         backoff = 1
@@ -505,7 +508,7 @@ class HaSession:
                         self._flush_outbox()
                         if self._need_snapshot and time.monotonic() >= self._snap_at:
                             self._need_snapshot = False
-                            self._snapshot(include_services=False)
+                            self._snapshot(include_services=False, reason="registry")
                         if time.monotonic() >= ping_at:
                             self.call({"type": "ping"})
                             self._flush_outbox()
@@ -565,7 +568,7 @@ class HaSession:
             backoff = min(30, backoff * 2 if backoff >= 2 else (2 if backoff == 1 else 5))
         emit({"event": "connection", "instanceId": self.instance_id, "state": "disconnected"})
 
-    def _snapshot(self, include_services: bool = True) -> None:
+    def _snapshot(self, include_services: bool = True, reason: str = "connect") -> None:
         if not self.ws:
             return
         areas = []
@@ -628,6 +631,7 @@ class HaSession:
             "instanceId": self.instance_id,
             "path": path,
             "fetchedAt": fetched,
+            "reason": reason,
             "entityCount": min(len(states), 5000),
             "areaCount": len(areas),
         })
