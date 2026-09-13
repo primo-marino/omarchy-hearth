@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+from datetime import datetime, timezone
 import socket
 import ssl
 import sys
@@ -593,8 +594,10 @@ class HaSession:
         self.last_states = states if isinstance(states, list) else []
         self.last_services = services if isinstance(services, dict) else {}
         path = os.path.join(CACHE_DIR, "%s.json" % self.instance_id)
+        fetched = datetime.now(timezone.utc).isoformat()
         payload = {
             "instanceId": self.instance_id,
+            "fetchedAt": fetched,
             "areas": areas,
             "devices": devices,
             "entities": entities[:5000],
@@ -606,6 +609,7 @@ class HaSession:
             "event": "snapshot",
             "instanceId": self.instance_id,
             "path": path,
+            "fetchedAt": fetched,
             "entityCount": min(len(states), 5000),
             "areaCount": len(areas),
         })

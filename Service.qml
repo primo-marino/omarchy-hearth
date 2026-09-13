@@ -164,6 +164,7 @@ Item {
     }
     if (msg.event === "snapshot") {
       snapFile.reload()
+      Qt.callLater(function() { root.applySnapshot(snapFile.text()) })
       root.refreshEnergy(true)
       return
     }

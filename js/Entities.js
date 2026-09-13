@@ -264,11 +264,30 @@ function effectiveArea(reg, devices) {
   return ""
 }
 
-function friendly(state, reg, entityId) {
+function deviceUserName(dev) {
+  if (!dev) return ""
+  if (dev.name_by_user) return String(dev.name_by_user)
+  return ""
+}
+
+function friendly(state, reg, entityId, devices) {
+  if (reg && reg.name) return String(reg.name)
+  var dev = null
+  if (reg && devices && reg.device_id) dev = devices[String(reg.device_id)]
+  var duser = deviceUserName(dev)
+  var orig = reg && reg.original_name ? String(reg.original_name).replace(/^\s+|\s+$/g, "") : ""
+  if (duser) {
+    if (!orig || orig.toLowerCase() === duser.toLowerCase()) return duser
+    return duser + " " + orig
+  }
   if (state && state.attributes && state.attributes.friendly_name)
     return String(state.attributes.friendly_name)
-  if (reg && reg.name) return String(reg.name)
-  if (reg && reg.original_name) return String(reg.original_name)
+  if (orig) return orig
+  if (dev && dev.name) {
+    var dname = String(dev.name)
+    if (orig && orig.toLowerCase() !== dname.toLowerCase()) return dname + " " + orig
+    return dname
+  }
   return String(entityId || "")
 }
 
@@ -348,7 +367,7 @@ function build(config, snap) {
     var areaId = effectiveArea(registry, devices)
     if (!areaAllowed(areaId, sel)) continue
     if (!includeAll && !allow[eid]) continue
-    var name = friendly(st, registry, eid)
+    var name = friendly(st, registry, eid, devices)
     var state = String(st.state || "")
     if (!validEntityId(eid)) continue
     if (!includeRow(kind, domain, st, services)) continue

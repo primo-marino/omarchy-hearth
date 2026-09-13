@@ -17,10 +17,11 @@ Entity: `fan.0x881a14fffe41c112` — currently named **Office Fan Light**, area 
 5. Tap **1**, then **2**, then **3**. Motor matches; HA `percentage` ≈ 33 / 67 / 100.
 6. From Super-space: **Hearth → Rooms → Office → Office Fan Light** should be a **submenu** with Off / Speed 1 / 2 / 3 (not a single toggle).
 7. Keyboard in the panel: `j`/`k` moves the highlight, Enter activates, `/` filters by name.
-8. **Rename in HA:** Settings → Devices → Office fan → rename to something obvious (e.g. `Office ceiling fan`).
-   - Within ~1s the Hearth row label must change (live `state_changed` / registry snapshot).
+8. **Rename in HA:** Settings → Devices → rename the **device** (not only an entity). Hearth uses `name_by_user` on the device, then entity name.
+   - Within ~1s the Hearth row label must change (device/entity registry snapshot).
    - Super-space label must update after the 250 ms menu sync (open Super-space again).
    - Recents / Favorites, if starred, show the new name too.
+   - `keepLoaded` helper changes need `omarchy restart shell` once; after that, renames are live.
 9. Rename it back if you want.
 
 Pass if you never need to restart the shell for the new name, and Off/1/2/3 all work.
