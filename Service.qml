@@ -356,10 +356,14 @@ Item {
     root.pendingActs = pa
     root.pendingWatch = true
     if (kind === "toggle") {
-      if (data && data.brightness !== undefined)
-        root.rooms = Entities.optimisticBrightness(root.rooms, eid, data.brightness)
-      else
+      if (data && (data.brightness !== undefined || data.brightness_pct !== undefined)) {
+        var bri = data.brightness
+        if (bri === undefined && data.brightness_pct !== undefined)
+          bri = Math.round(Number(data.brightness_pct) * 255 / 100)
+        root.rooms = Entities.optimisticBrightness(root.rooms, eid, bri)
+      } else {
         root.rooms = Entities.optimisticToggle(root.rooms, eid)
+      }
       root.refreshLists()
     }
     if (kind === "fan") {

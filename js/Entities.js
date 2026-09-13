@@ -94,6 +94,9 @@ function pickAttrs(st) {
     min_humidity: a.min_humidity,
     max_humidity: a.max_humidity,
     brightness: a.brightness,
+    brightness_pct: a.brightness_pct,
+    supported_color_modes: a.supported_color_modes,
+    color_mode: a.color_mode,
     percentage: a.percentage,
     percentage_step: a.percentage_step,
     preset_modes: a.preset_modes,
@@ -153,6 +156,28 @@ function mediaCanPlayPause(st, attrs) {
   var n = Number(feat)
   if (!isFinite(n)) return true
   return (n & MEDIA_PAUSE) !== 0 || (n & MEDIA_PLAY) !== 0
+}
+
+function lightIsDimmer(attrs) {
+  var modes = attrs && attrs.supported_color_modes
+  if (modes && modes.length) {
+    for (var i = 0; i < modes.length; i++) {
+      if (String(modes[i]) !== "onoff") return true
+    }
+    return false
+  }
+  if (attrs && attrs.brightness !== undefined && attrs.brightness !== null) return true
+  var feat = num(attrs && attrs.supported_features)
+  return isFinite(feat) && (feat & 1) !== 0
+}
+
+function lightBrightnessPct(state, attrs) {
+  if (String(state || "") === "off") return 0
+  var p = num(attrs && attrs.brightness_pct)
+  if (isFinite(p)) return Math.max(0, Math.min(100, Math.round(p)))
+  var b = num(attrs && attrs.brightness)
+  if (isFinite(b)) return Math.max(0, Math.min(100, Math.round(b * 100 / 255)))
+  return 0
 }
 
 function fanStep(attrs) {
@@ -464,6 +489,7 @@ function optimisticBrightness(rooms, entityId, brightness) {
       if (ents[j].entity_id !== eid) continue
       var attrs = ents[j].attrs || {}
       attrs.brightness = bri <= 0 ? 0 : bri
+      attrs.brightness_pct = bri <= 0 ? 0 : Math.round(bri * 100 / 255)
       ents[j].attrs = attrs
       ents[j].state = bri <= 0 ? "off" : "on"
       ents[j].pending = true

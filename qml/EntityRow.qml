@@ -22,6 +22,8 @@ Item {
   readonly property string errorText: entity && entity.lastError ? String(entity.lastError) : ""
   readonly property bool showPlay: kind === "media" && Entities.mediaCanPlayPause({ state: entity.state }, attrs)
   readonly property bool showVolume: kind === "media" && attrs.volume_level !== undefined && attrs.volume_level !== null
+  readonly property bool dimmer: kind === "toggle" && domain === "light" && Entities.lightIsDimmer(attrs)
+  readonly property int brightnessPct: Entities.lightBrightnessPct(entity.state, attrs)
   readonly property bool fanSpeeds: kind === "fan" && Entities.fanHasSpeeds(attrs)
   readonly property var fanOptions: {
     var opts = [{ value: "0", label: "Off" }]
@@ -113,7 +115,7 @@ Item {
       opacity: root.unavailable ? 0.45 : 1
 
       Toggle {
-        visible: root.kind === "toggle" || (root.kind === "fan" && !root.fanSpeeds)
+        visible: (root.kind === "toggle" && !root.dimmer) || (root.kind === "fan" && !root.fanSpeeds)
         width: parent.width
         enabled: !root.unavailable
         label: entity.name || entity.entity_id || ""
@@ -124,18 +126,34 @@ Item {
         onClicked: root.run("toggle")
       }
 
-      PanelSlider {
-        visible: root.kind === "toggle" && root.domain === "light" && attrs.brightness !== undefined && attrs.brightness !== null
+      Column {
+        visible: root.dimmer
         width: parent.width
-        enabled: !root.unavailable
-        bar: root.bar
-        value: Math.max(0, Math.min(255, Number(attrs.brightness) || 0))
-        minimum: 0
-        maximum: 255
-        integer: true
-        onReleased: function(v) {
-          if (v <= 0) root.run("turn_off")
-          else root.run("turn_on", { brightness: Math.round(v) })
+        spacing: Style.space(4)
+        Toggle {
+          width: parent.width
+          enabled: !root.unavailable
+          label: entity.name || entity.entity_id || ""
+          description: entity.pending ? "…" : (entity.state === "on" ? (root.brightnessPct + "%") : "off")
+          checked: entity.state === "on"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onClicked: root.run("toggle")
+        }
+        PanelSlider {
+          width: parent.width
+          enabled: !root.unavailable
+          bar: root.bar
+          value: root.brightnessPct
+          minimum: 0
+          maximum: 100
+          step: 1
+          integer: true
+          onReleased: function(v) {
+            var pct = Math.round(v)
+            if (pct <= 0) root.run("turn_off")
+            else root.run("turn_on", { brightness_pct: pct })
+          }
         }
       }
 
