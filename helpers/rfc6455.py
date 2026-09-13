@@ -55,10 +55,21 @@ class WebSocketClient:
         self.closed = False
 
     def _sendall(self, data: bytes) -> None:
-        self.sock.sendall(data)
+        sock = self.sock
+        if self.closed or sock is None:
+            raise WebSocketClosed(1006, "closed")
+        sock.sendall(data)
 
     def _recv_more(self) -> bytes:
-        chunk = self.sock.recv(65536)
+        sock = self.sock
+        if self.closed or sock is None:
+            raise WebSocketClosed(1006, "closed")
+        try:
+            chunk = sock.recv(65536)
+        except OSError as e:
+            if e.errno in (9, 104, 32, 107):  # EBADF, ECONNRESET, EPIPE, ENOTCONN
+                raise WebSocketClosed(1006, "socket %s" % e.errno) from e
+            raise
         if not chunk:
             raise WebSocketClosed(1006, "peer closed")
         return chunk
@@ -98,14 +109,17 @@ class WebSocketClient:
     def close(self, code: int = 1000, reason: str = "") -> None:
         if self.closed:
             return
-        payload = struct.pack("!H", code) + reason.encode("utf-8")[:123]
+        self.closed = True
+        sock = self.sock
+        self.sock = None
+        if sock is None:
+            return
         try:
-            self.send_frame(OP_CLOSE, payload)
+            sock.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
-        self.closed = True
         try:
-            self.sock.close()
+            sock.close()
         except OSError:
             pass
 
@@ -125,11 +139,7 @@ class WebSocketClient:
                 if len(payload) >= 2:
                     code = struct.unpack("!H", payload[:2])[0]
                     reason = payload[2:].decode("utf-8", "replace")
-                self.closed = True
-                try:
-                    self.sock.close()
-                except OSError:
-                    pass
+                self.close(code, reason)
                 raise WebSocketClosed(code, reason)
             raise WebSocketError(f"unsupported opcode {opcode}")
 

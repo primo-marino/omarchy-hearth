@@ -103,6 +103,7 @@ class Rfc6455Tests(unittest.TestCase):
         ok = ws.recv()
         self.assertIn("auth_ok", ok)
         ws.close()
+        ws.close()
         done.wait(2)
 
     def test_reject_extensions(self):

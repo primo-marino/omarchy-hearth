@@ -112,7 +112,7 @@ Item {
       return -1
     }
     var pending = root._pending
-    pending[id] = cb || null
+    pending[id] = { cb: cb || null }
     root._pending = pending
     if (!helper.running) helper.running = true
     if (helperReady) helper.write(line + "\n")
@@ -137,13 +137,13 @@ Item {
     if (!msg || typeof msg !== "object") return
     if (msg.event === "result") {
       var rid = msg.id
-      var cb = root._pending[rid]
-      if (!cb && rid !== undefined && rid !== null) cb = root._pending[String(rid)] || root._pending[Number(rid)]
+      var rec = root._pending[rid]
+      if (!rec && rid !== undefined && rid !== null)
+        rec = root._pending[String(rid)] || root._pending[Number(rid)]
       delete root._pending[rid]
       delete root._pending[String(rid)]
       delete root._pending[Number(rid)]
-      if (cb) cb(msg)
-      else console.warn("hearth: result with no waiter id=" + rid)
+      if (rec && rec.cb) rec.cb(msg)
       return
     }
     if (msg.event === "connection") {
@@ -735,7 +735,10 @@ Item {
     }
     stderr: SplitParser {
       onRead: function(line) {
-        if (line) console.warn("hearth helper: " + line)
+        if (!line) return
+        if (line.indexOf("Errno 9") !== -1 || line.indexOf("Bad file descriptor") !== -1) return
+        if (line.indexOf("Exception ignored") !== -1) return
+        console.warn("hearth helper: " + line)
       }
     }
     onStarted: {

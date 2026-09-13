@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import queue
@@ -443,10 +444,12 @@ class HaSession:
         for _mid, (ev, holder) in pending:
             holder["msg"] = {"success": False, "error": {"code": "disconnected"}}
             ev.set()
-        if self.ws:
+        ws = self.ws
+        self.ws = None
+        if ws:
             try:
-                self.ws.close()
-            except Exception:
+                ws.close()
+            except OSError:
                 pass
 
     def call(self, payload: dict[str, Any]) -> None:
@@ -493,9 +496,11 @@ class HaSession:
                     self.ws.sock.settimeout(0.2)
                     try:
                         self._flush_outbox()
+                        if not self.ws:
+                            break
                         raw = self.ws.recv()
                     except TimeoutError:
-                        if self.stop.is_set():
+                        if self.stop.is_set() or not self.ws:
                             break
                         self._flush_outbox()
                         if self._need_snapshot and time.monotonic() >= self._snap_at:
@@ -506,6 +511,10 @@ class HaSession:
                             self._flush_outbox()
                             ping_at = time.monotonic() + 30
                         continue
+                    except OSError as e:
+                        if self.stop.is_set() or e.errno in (errno.EBADF, errno.ECONNRESET, errno.EPIPE):
+                            break
+                        raise
                     msg = json.loads(raw)
                     mid = msg.get("id")
                     waiter = None
@@ -536,9 +545,18 @@ class HaSession:
                     elif msg.get("type") == "pong":
                         ping_at = time.monotonic() + 30
             except WebSocketClosed as e:
+                if self.stop.is_set():
+                    break
+                emit({"event": "connection", "instanceId": self.instance_id, "state": "reconnecting",
+                      "error": str(e)})
+            except OSError as e:
+                if self.stop.is_set() or e.errno == errno.EBADF:
+                    break
                 emit({"event": "connection", "instanceId": self.instance_id, "state": "reconnecting",
                       "error": str(e)})
             except Exception as e:
+                if self.stop.is_set():
+                    break
                 emit({"event": "connection", "instanceId": self.instance_id, "state": "reconnecting",
                       "error": str(e)})
             if self.stop.is_set():
