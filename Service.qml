@@ -722,6 +722,17 @@ Item {
   }
 
   Timer {
+    id: reconnectWatch
+    interval: 4000
+    repeat: true
+    running: root.configured && root.helperReady && root.connectionState !== "connected" && root.connectionState !== "reconnecting"
+    onTriggered: {
+      if (root.config.activeInstanceId)
+        root.sendCmd({ cmd: "connect", instanceId: root.config.activeInstanceId }, null)
+    }
+  }
+
+  Timer {
     id: midnightEnergy
     interval: 60000
     repeat: true

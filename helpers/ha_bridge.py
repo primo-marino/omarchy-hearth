@@ -515,9 +515,9 @@ class HaSession:
                             ping_at = time.monotonic() + 30
                         continue
                     except OSError as e:
-                        if self.stop.is_set() or e.errno in (errno.EBADF, errno.ECONNRESET, errno.EPIPE):
+                        if self.stop.is_set():
                             break
-                        raise
+                        raise WebSocketClosed(1006, "socket errno %s" % e.errno) from e
                     msg = json.loads(raw)
                     mid = msg.get("id")
                     waiter = None
@@ -544,7 +544,7 @@ class HaSession:
                                 })
                         elif et in ("entity_registry_updated", "area_registry_updated", "device_registry_updated"):
                             self._need_snapshot = True
-                            self._snap_at = time.monotonic() + 0.4
+                            self._snap_at = time.monotonic() + 2.0
                     elif msg.get("type") == "pong":
                         ping_at = time.monotonic() + 30
             except WebSocketClosed as e:
@@ -553,7 +553,7 @@ class HaSession:
                 emit({"event": "connection", "instanceId": self.instance_id, "state": "reconnecting",
                       "error": str(e)})
             except OSError as e:
-                if self.stop.is_set() or e.errno == errno.EBADF:
+                if self.stop.is_set():
                     break
                 emit({"event": "connection", "instanceId": self.instance_id, "state": "reconnecting",
                       "error": str(e)})
@@ -568,9 +568,25 @@ class HaSession:
             backoff = min(30, backoff * 2 if backoff >= 2 else (2 if backoff == 1 else 5))
         emit({"event": "connection", "instanceId": self.instance_id, "state": "disconnected"})
 
+    def _set_sock_timeout(self, seconds: float) -> None:
+        if not self.ws or not getattr(self.ws, "sock", None):
+            return
+        try:
+            self.ws.sock.settimeout(seconds)
+        except OSError:
+            pass
+
     def _snapshot(self, include_services: bool = True, reason: str = "connect") -> None:
         if not self.ws:
             return
+        # get_states is ~1 MiB; the idle loop uses 0.2s and would drop the socket.
+        self._set_sock_timeout(30.0)
+        try:
+            self._snapshot_body(include_services, reason)
+        finally:
+            self._set_sock_timeout(0.2)
+
+    def _snapshot_body(self, include_services: bool, reason: str) -> None:
         areas = []
         devices = []
         entities = []
