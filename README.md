@@ -4,7 +4,7 @@ Remote-control Home Assistant from the Omarchy bar and Super-space menu.
 
 v0.1 is a **bar pill + popup panel** (Weather / Tailscale family), not a Lovelace dashboard, not a camera viewer, and not Frigate.
 
-Version **0.1.0**. Plugin id `hearth`.
+Version **0.1.1**. Plugin id `hearth`.
 
 ## Install
 
@@ -36,7 +36,7 @@ Onboard asks for a Home Assistant URL (`homeassistant.local:8123`, a LAN IP, Tai
 - a **long-lived access token** (HA Profile → Long-lived access tokens), or
 - **username and password** only if `/auth/providers` includes `type === "homeassistant"`. Hearth mints a long-lived token named `Hearth` (3650 days) and does not keep the password.
 
-Tokens live in `~/.config/omarchy/hearth/secrets.json` mode `0600`, written **only** by `helpers/ha_bridge.py`. Never in `shell.json`, QML `FileView`, or the Omarchy menu file.
+Tokens live in `~/.config/omarchy/hearth/secrets.json` mode `0600`, written **only** by `helpers/ha_bridge.py`. Never in `shell.json`, QML `FileView`, or the Omarchy menu file. The helper re-chmods that file on start. Menu actions quote the CLI path and entity id. The helper accepts only `call_service` for a valid `entity_id` (no other HA WebSocket types).
 
 HTTP is allowed after an explicit acknowledgement. `*.ui.nabu.casa` does not offer insecure TLS on first run. HA-on-a-subpath (`https://gw.example/ha/`) is not supported.
 

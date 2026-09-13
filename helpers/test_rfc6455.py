@@ -182,6 +182,29 @@ class BridgeUnitTests(unittest.TestCase):
         self.assertFalse(ha_bridge.has_homeassistant_provider({"providers": [{"type": "trusted_networks"}]}))
         self.assertEqual(ha_bridge.homeassistant_handler(obj), ["homeassistant", None])
 
+    def test_sanitize_call_payload_rejects_non_service(self):
+        import ha_bridge
+
+        good = ha_bridge.sanitize_call_payload({
+            "type": "call_service",
+            "domain": "light",
+            "service": "turn_on",
+            "target": {"entity_id": "light.kitchen"},
+            "service_data": {"brightness_pct": 40, "evil key": 1},
+        })
+        self.assertEqual(good["type"], "call_service")
+        self.assertEqual(good["target"]["entity_id"], "light.kitchen")
+        self.assertEqual(good["service_data"], {"brightness_pct": 40})
+        self.assertIsNone(ha_bridge.sanitize_call_payload({"type": "get_config"}))
+        self.assertIsNone(ha_bridge.sanitize_call_payload({
+            "type": "call_service", "domain": "light", "service": "turn_on",
+            "target": {"entity_id": "light.x; rm -rf /"},
+        }))
+        self.assertIsNone(ha_bridge.sanitize_call_payload({
+            "type": "call_service", "domain": "light;id", "service": "turn_on",
+            "target": {"entity_id": "light.kitchen"},
+        }))
+
     def test_redact_strips_tokens(self):
         import ha_bridge
 

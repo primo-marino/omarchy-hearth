@@ -199,6 +199,17 @@ def connect(url: str, tls_insecure: bool = False, timeout: float = 15.0) -> WebS
         path += "?" + parsed.query
 
     sock = socket.create_connection((host, port), timeout=timeout)
+    try:
+        return _upgrade(sock, parsed, host, port, path, tls_insecure, timeout)
+    except Exception:
+        try:
+            sock.close()
+        except OSError:
+            pass
+        raise
+
+
+def _upgrade(sock, parsed, host, port, path, tls_insecure, timeout):
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
     if parsed.scheme == "wss":

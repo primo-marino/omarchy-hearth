@@ -1,5 +1,9 @@
 .pragma library
 
+function shQuote(value) {
+  return "'" + String(value || "").replace(/'/g, "'\\''") + "'"
+}
+
 function slugSeg(value) {
   var s = String(value || "").toLowerCase()
   s = s.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
@@ -38,7 +42,7 @@ function leaf(cli, entity) {
     icon: actIcon(entity),
     label: actLabel(entity),
     aliases: entity.name ? [String(entity.name)] : [],
-    action: cli + " act " + eid
+    action: shQuote(cli) + " act " + shQuote(eid)
   }
 }
 
@@ -46,7 +50,7 @@ function disconnected(cli) {
   return {
     "hearth": { icon: "󰋜", label: "Hearth", aliases: ["home assistant", "ha"] },
     "hearth.open": { icon: "󰏥", label: "Open Hearth", action: "omarchy-shell shell summon hearth" },
-    "hearth.add": { icon: "", label: "Add Home Assistant", action: cli + " onboard" },
+    "hearth.add": { icon: "", label: "Add Home Assistant", action: shQuote(cli) + " onboard" },
     "hearth.status": {
       icon: "󰋜",
       label: "Hearth is not connected",
@@ -60,7 +64,7 @@ function build(config, state, rooms, cli, connected) {
   var tree = {
     "hearth": { icon: "󰋜", label: "Hearth", aliases: ["home assistant", "ha"] },
     "hearth.open": { icon: "󰏥", label: "Open Hearth", action: "omarchy-shell shell summon hearth" },
-    "hearth.add": { icon: "", label: "Add Home Assistant", action: path + " onboard" }
+    "hearth.add": { icon: "", label: "Add Home Assistant", action: shQuote(path) + " onboard" }
   }
   var instances = config && config.instances ? config.instances : []
   if (!instances.length) return disconnected(path)
@@ -80,7 +84,7 @@ function build(config, state, rooms, cli, connected) {
     tree["hearth.instance." + iid] = {
       icon: iid === activeId ? "✓" : "",
       label: iname,
-      action: path + " instance " + iid
+      action: shQuote(path) + " instance " + shQuote(iid)
     }
   }
 
@@ -111,13 +115,13 @@ function build(config, state, rooms, cli, connected) {
         if (speeds < 1) speeds = 1
         if (speeds > 6) speeds = 6
         tree[ekey] = { icon: actIcon(ents[e]), label: actLabel(ents[e]) }
-        tree[ekey + ".off"] = { icon: "󰈐", label: "Off", action: path + " act " + ents[e].entity_id + " turn_off" }
+        tree[ekey + ".off"] = { icon: "󰈐", label: "Off", action: shQuote(path) + " act " + shQuote(ents[e].entity_id) + " turn_off" }
         for (var sp = 1; sp <= speeds; sp++) {
           var pct = sp >= speeds ? 100 : Math.floor((sp * 100) / speeds)
           tree[ekey + "." + sp] = {
             icon: "󰈐",
             label: "Speed " + sp,
-            action: path + " act " + ents[e].entity_id + " set_percentage " + pct
+            action: shQuote(path) + " act " + shQuote(ents[e].entity_id) + " set_percentage " + pct
           }
         }
       } else {
@@ -128,7 +132,7 @@ function build(config, state, rooms, cli, connected) {
       tree[rkey + ".more"] = {
         icon: "󰏥",
         label: "Open " + rname + " in Hearth",
-        action: path + " open --room " + rid
+        action: shQuote(path) + " open --room " + shQuote(rid)
       }
     }
   }

@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 import menu_sync
 
@@ -43,7 +44,7 @@ class MenuSyncTests(unittest.TestCase):
             path = os.path.join(tmp, "omarchy-menu.jsonc")
             with open(path, "w", encoding="utf-8") as f:
                 f.write("{ nope")
-            before = open(path).read()
+            before = Path(path).read_text(encoding="utf-8")
             result = menu_sync.sync(
                 tree={"hearth": {"label": "X"}},
                 cli="/bin/true",
@@ -52,7 +53,7 @@ class MenuSyncTests(unittest.TestCase):
             )
             self.assertFalse(result["ok"])
             self.assertEqual(result["error"], "parse_failed")
-            self.assertEqual(open(path).read(), before)
+            self.assertEqual(Path(path).read_text(encoding="utf-8"), before)
 
     def test_sync_writes_and_preserves(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,10 +69,10 @@ class MenuSyncTests(unittest.TestCase):
             )
             self.assertTrue(result["ok"])
             self.assertTrue(result["wrote"])
-            data = json.loads(open(path).read())
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
             self.assertEqual(data["personal.notes"]["label"], "Notes")
             self.assertEqual(data["hearth"]["label"], "Hearth")
-            self.assertNotIn("//", open(path).read())
+            self.assertNotIn("//", Path(path).read_text(encoding="utf-8"))
 
     def test_hearth_key_does_not_eat_hearthside(self):
         self.assertFalse(menu_sync.is_hearth_key("hearthside"))
@@ -86,9 +87,9 @@ class MenuSyncTests(unittest.TestCase):
                 menu_path=path,
                 etag_path=etag,
             )
-            data = json.loads(open(path).read())
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
             data["personal.notes"] = {"label": "Notes"}
-            open(path, "w").write(json.dumps(data, indent=2) + "\n")
+            Path(path).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
             result = menu_sync.sync(
                 tree={"hearth": {"label": "Hearth"}, "hearth.open": {"label": "Open", "action": "x"}},
                 cli="/tmp/hearth",
@@ -96,7 +97,7 @@ class MenuSyncTests(unittest.TestCase):
                 etag_path=etag,
             )
             self.assertTrue(result.get("ok"))
-            merged = json.loads(open(path).read())
+            merged = json.loads(Path(path).read_text(encoding="utf-8"))
             self.assertEqual(merged["personal.notes"]["label"], "Notes")
             self.assertIn("hearth.open", merged)
 
@@ -106,7 +107,7 @@ class MenuSyncTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump({"personal.notes": {"label": "N"}, "hearth": {"label": "H"}}, f)
             menu_sync.sync(tree={}, cli="", menu_path=path, etag_path=os.path.join(tmp, "etag"))
-            data = json.loads(open(path).read())
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
             self.assertIn("personal.notes", data)
             self.assertNotIn("hearth", data)
 

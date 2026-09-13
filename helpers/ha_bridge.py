@@ -17,6 +17,7 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+import re
 from typing import Any, Optional
 
 from rfc6455 import MAX_FRAME, WebSocketClosed, WebSocketError, connect as ws_connect
@@ -55,6 +56,37 @@ SECRETS_PATH = os.path.join(CONFIG_DIR, "secrets.json")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 JSON_LINE_CAP = 256 * 1024
 LLAT_LIFESPAN_DAYS = 3650
+ENTITY_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+SLUG_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+ATTR_KEEP = (
+    "friendly_name",
+    "brightness",
+    "brightness_pct",
+    "supported_color_modes",
+    "color_mode",
+    "percentage",
+    "percentage_step",
+    "preset_modes",
+    "preset_mode",
+    "supported_features",
+    "temperature",
+    "target_temp",
+    "current_temperature",
+    "target_temp_step",
+    "min_temp",
+    "max_temp",
+    "temperature_unit",
+    "hvac_modes",
+    "hvac_mode",
+    "volume_level",
+    "volume_step",
+    "humidity",
+    "current_humidity",
+    "min_humidity",
+    "max_humidity",
+    "code_arm_required",
+    "code_disarm_required",
+)
 
 lock = threading.Lock()
 emit_lock = threading.Lock()
@@ -101,6 +133,11 @@ def ensure_dirs() -> None:
         os.chmod(CONFIG_DIR, 0o700)
     except OSError:
         pass
+    if os.path.isfile(SECRETS_PATH):
+        try:
+            os.chmod(SECRETS_PATH, 0o600)
+        except OSError:
+            pass
 
 
 def atomic_write(path: str, data: str, mode: int) -> None:
@@ -179,6 +216,60 @@ def sweep_orphans() -> None:
         del inst[k]
         log("info", "hearth: dropped orphan secret id %s" % k)
     write_secrets(data)
+
+
+def slim_entity(entity: dict[str, Any]) -> dict[str, Any]:
+    attrs = entity.get("attributes") or {}
+    slim = {}
+    if isinstance(attrs, dict):
+        for key in ATTR_KEEP:
+            if key in attrs:
+                slim[key] = attrs[key]
+    return {
+        "entity_id": entity.get("entity_id"),
+        "state": entity.get("state"),
+        "attributes": slim,
+    }
+
+
+def safe_service_data(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in data.items():
+        if not SLUG_RE.match(str(key)):
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            out[str(key)] = value
+        elif isinstance(value, list) and all(isinstance(x, (str, int, float, bool)) or x is None for x in value):
+            out[str(key)] = value
+    return out
+
+
+def sanitize_call_payload(payload: Any) -> Optional[dict[str, Any]]:
+    """Only authenticated call_service for one entity_id. No other WS types."""
+    if not isinstance(payload, dict):
+        return None
+    if str(payload.get("type") or "") != "call_service":
+        return None
+    domain = str(payload.get("domain") or "")
+    service = str(payload.get("service") or "")
+    if not SLUG_RE.match(domain) or not SLUG_RE.match(service):
+        return None
+    target = payload.get("target") if isinstance(payload.get("target"), dict) else {}
+    entity_id = str((target or {}).get("entity_id") or payload.get("entity_id") or "")
+    if not ENTITY_RE.match(entity_id):
+        return None
+    clean: dict[str, Any] = {
+        "type": "call_service",
+        "domain": domain,
+        "service": service,
+        "target": {"entity_id": entity_id},
+    }
+    data = safe_service_data(payload.get("service_data"))
+    if data:
+        clean["service_data"] = data
+    return clean
 
 
 def ssl_context(tls_insecure: bool) -> Optional[ssl.SSLContext]:
@@ -536,11 +627,7 @@ class HaSession:
                                 emit({
                                     "event": "state_changed",
                                     "instanceId": self.instance_id,
-                                    "entity": {
-                                        "entity_id": entity.get("entity_id"),
-                                        "state": entity.get("state"),
-                                        "attributes": entity.get("attributes") or {},
-                                    },
+                                    "entity": slim_entity(entity),
                                 })
                         elif et in ("entity_registry_updated", "area_registry_updated", "device_registry_updated"):
                             self._need_snapshot = True
@@ -851,9 +938,9 @@ def cmd_call(cmd: dict[str, Any]) -> dict[str, Any]:
         sess = sessions.get(instance_id)
     if not sess:
         return {"ok": False, "error": "not connected"}
-    payload = cmd.get("payload") or {}
-    if not isinstance(payload, dict):
-        return {"ok": False, "error": "bad payload"}
+    payload = sanitize_call_payload(cmd.get("payload"))
+    if not payload:
+        return {"ok": False, "error": "only call_service for a valid entity is allowed"}
     msg = sess.rpc(payload, timeout=15.0)
     if not msg.get("success"):
         err = msg.get("error") or {}

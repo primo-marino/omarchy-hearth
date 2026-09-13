@@ -13,7 +13,7 @@ Hearth is **installed and enabled** on this Omarchy session.
 2. Helper: `helpers/rfc6455.py` + `helpers/ha_bridge.py` (`python3 -u` JSON-lines). Tests in `helpers/test_rfc6455.py` (9 passing): 101 upgrade, 2 MiB accept, >32 MiB reject, no extensions, provider envelope, token redact.
 3. Onboard: name, URL, token vs password (password only if `/auth/providers` has `type === "homeassistant"`), HTTP ack, insecure TLS, Test connection, room checklist, Save. Secrets written only by the helper at `~/.config/omarchy/hearth/secrets.json` `0600`.
 
-## Done (PR 4–9 / v0.1.0)
+## Done (PR 4–9 / v0.1.1)
 
 4. Allow-list hide-filters in `js/Entities.js` (config/diagnostic/hidden/disabled, 5000 cap, area via device parent). Snapshot still written by the helper.
 5a. Connected panel: Recents / Favorites / Rooms tabs (`1`/`2`/`3`), star (`f` / ★), last-12 recents in `state.json`, cover Open/Close/Stop + lock Lock/Unlock, optimistic toggles with 2s revert, Settings (`s`) to re-pick rooms, replace token, remove instance. Pill still shows `N on`.
