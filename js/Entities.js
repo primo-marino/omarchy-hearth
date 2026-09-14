@@ -292,30 +292,62 @@ function effectiveArea(reg, devices) {
   return ""
 }
 
-function deviceUserName(dev) {
+function deviceDisplayName(dev) {
   if (!dev) return ""
   if (dev.name_by_user) return String(dev.name_by_user)
+  if (dev.name) return String(dev.name)
   return ""
 }
 
-function friendly(state, reg, entityId, devices) {
-  if (reg && reg.name) return String(reg.name)
+function domainWord(domain) {
+  if (domain === "media_player") return "Media"
+  if (domain === "input_boolean") return "Toggle"
+  if (domain === "water_heater") return "Water heater"
+  if (domain === "alarm_control_panel") return "Alarm"
+  if (!domain) return ""
+  return domain.charAt(0).toUpperCase() + domain.slice(1).replace(/_/g, " ")
+}
+
+function joinDeviceEntity(deviceName, piece) {
+  var d = String(deviceName || "").replace(/^\s+|\s+$/g, "")
+  var p = String(piece || "").replace(/^\s+|\s+$/g, "")
+  if (!d) return p
+  if (!p) return d
+  var dl = d.toLowerCase()
+  var pl = p.toLowerCase()
+  if (dl === pl) return d
+  if (dl.length >= pl.length) {
+    var tail = dl.slice(dl.length - pl.length)
+    var before = dl.length === pl.length ? "" : dl.charAt(dl.length - pl.length - 1)
+    if (tail === pl && (before === "" || before === " ")) return d
+  }
+  return d + " " + p
+}
+
+function friendly(state, reg, entityId, devices, unnamedSiblings) {
   var dev = null
   if (reg && devices && reg.device_id) dev = devices[String(reg.device_id)]
-  var duser = deviceUserName(dev)
+  var deviceName = deviceDisplayName(dev)
   var orig = reg && reg.original_name ? String(reg.original_name).replace(/^\s+|\s+$/g, "") : ""
-  if (duser) {
-    if (!orig || orig.toLowerCase() === duser.toLowerCase()) return duser
-    return duser + " " + orig
+  var entityFn = ""
+  if (reg && reg.name) entityFn = String(reg.name)
+  else if (orig) entityFn = orig
+  var hasEn = !!(reg && reg.has_entity_name)
+  var domain = domainOf(entityId)
+
+  if (hasEn && deviceName) {
+    if (entityFn) return joinDeviceEntity(deviceName, entityFn)
+    if (unnamedSiblings > 1) {
+      if (domain === "fan" && / fan light$/i.test(deviceName))
+        return deviceName.replace(/ light$/i, "")
+      return joinDeviceEntity(deviceName, domainWord(domain))
+    }
+    return deviceName
   }
+  if (entityFn) return entityFn
   if (state && state.attributes && state.attributes.friendly_name)
     return String(state.attributes.friendly_name)
-  if (orig) return orig
-  if (dev && dev.name) {
-    var dname = String(dev.name)
-    if (orig && orig.toLowerCase() !== dname.toLowerCase()) return dname + " " + orig
-    return dname
-  }
+  if (deviceName) return deviceName
   return String(entityId || "")
 }
 
@@ -379,6 +411,21 @@ function build(config, snap) {
     for (var s = 0; s < inst.selectedEntityIds.length; s++) allow[String(inst.selectedEntityIds[s])] = true
   }
 
+  var unnamedSiblings = ({})
+  for (var rk in regs) {
+    if (!Object.prototype.hasOwnProperty.call(regs, rk)) continue
+    var rr = regs[rk]
+    if (!rr || isHidden(rr)) continue
+    if (!kindOf(domainOf(rk))) continue
+    if (rr.name) continue
+    var o = rr.original_name ? String(rr.original_name).replace(/^\s+|\s+$/g, "") : ""
+    if (o) continue
+    if (!rr.has_entity_name) continue
+    var did = String(rr.device_id || "")
+    if (!did) continue
+    unnamedSiblings[did] = (unnamedSiblings[did] || 0) + 1
+  }
+
   var byArea = ({})
   var lightsOn = 0
   var count = 0
@@ -395,7 +442,7 @@ function build(config, snap) {
     var areaId = effectiveArea(registry, devices)
     if (!areaAllowed(areaId, sel)) continue
     if (!includeAll && !allow[eid]) continue
-    var name = friendly(st, registry, eid, devices)
+    var name = friendly(st, registry, eid, devices, unnamedSiblings[String(registry && registry.device_id || "")] || 1)
     var state = String(st.state || "")
     if (!validEntityId(eid)) continue
     if (!includeRow(kind, domain, st, services)) continue
