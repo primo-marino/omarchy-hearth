@@ -45,6 +45,14 @@ class FakeHA:
             self.sock.close()
         except OSError:
             pass
+        self.thread.join(timeout=1)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
 
 def read_http(conn):
@@ -95,33 +103,34 @@ class Rfc6455Tests(unittest.TestCase):
             conn.sendall(rfc6455.encode_frame_for_tests(rfc6455.OP_TEXT, b'{"type":"auth_ok"}'))
             done.set()
 
-        srv = FakeHA(handler)
-        ws = rfc6455.connect(f"ws://127.0.0.1:{srv.port}/api/websocket")
-        hello = ws.recv()
-        self.assertIn("auth_required", hello)
-        ws.send_text('{"type":"auth","access_token":"x"}')
-        ok = ws.recv()
-        self.assertIn("auth_ok", ok)
-        ws.close()
-        ws.close()
-        done.wait(2)
+        with FakeHA(handler) as srv:
+            ws = rfc6455.connect(f"ws://127.0.0.1:{srv.port}/api/websocket")
+            try:
+                hello = ws.recv()
+                self.assertIn("auth_required", hello)
+                ws.send_text('{"type":"auth","access_token":"x"}')
+                ok = ws.recv()
+                self.assertIn("auth_ok", ok)
+            finally:
+                ws.close()
+            done.wait(2)
 
     def test_reject_extensions(self):
         def handler(conn):
             accept_upgrade(conn, extra_headers=b"Sec-WebSocket-Extensions: permessage-deflate\r\n")
 
-        srv = FakeHA(handler)
-        with self.assertRaises(rfc6455.WebSocketError):
-            rfc6455.connect(f"ws://127.0.0.1:{srv.port}/")
+        with FakeHA(handler) as srv:
+            with self.assertRaises(rfc6455.WebSocketError):
+                rfc6455.connect(f"ws://127.0.0.1:{srv.port}/")
 
     def test_reject_non_101(self):
         def handler(conn):
             read_http(conn)
             conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
 
-        srv = FakeHA(handler)
-        with self.assertRaises(rfc6455.WebSocketError):
-            rfc6455.connect(f"ws://127.0.0.1:{srv.port}/")
+        with FakeHA(handler) as srv:
+            with self.assertRaises(rfc6455.WebSocketError):
+                rfc6455.connect(f"ws://127.0.0.1:{srv.port}/")
 
     def test_accept_2mib_text_frame(self):
         payload = b"x" * (2 * 1024 * 1024)
@@ -130,11 +139,13 @@ class Rfc6455Tests(unittest.TestCase):
             accept_upgrade(conn)
             conn.sendall(rfc6455.encode_frame_for_tests(rfc6455.OP_TEXT, payload))
 
-        srv = FakeHA(handler)
-        ws = rfc6455.connect(f"ws://127.0.0.1:{srv.port}/")
-        text = ws.recv()
-        self.assertEqual(len(text), len(payload))
-        ws.close()
+        with FakeHA(handler) as srv:
+            ws = rfc6455.connect(f"ws://127.0.0.1:{srv.port}/")
+            try:
+                text = ws.recv()
+                self.assertEqual(len(text), len(payload))
+            finally:
+                ws.close()
 
     def test_reject_oversize_frame_header(self):
         def handler(conn):
@@ -146,22 +157,26 @@ class Rfc6455Tests(unittest.TestCase):
             header.extend((rfc6455.MAX_FRAME + 1).to_bytes(8, "big"))
             conn.sendall(bytes(header))
 
-        srv = FakeHA(handler)
-        ws = rfc6455.connect(f"ws://127.0.0.1:{srv.port}/")
-        with self.assertRaises(rfc6455.WebSocketError):
-            ws.recv()
-        ws.close()
+        with FakeHA(handler) as srv:
+            ws = rfc6455.connect(f"ws://127.0.0.1:{srv.port}/")
+            try:
+                with self.assertRaises(rfc6455.WebSocketError):
+                    ws.recv()
+            finally:
+                ws.close()
 
     def test_reject_binary(self):
         def handler(conn):
             accept_upgrade(conn)
             conn.sendall(rfc6455.encode_frame_for_tests(rfc6455.OP_BIN, b"nope"))
 
-        srv = FakeHA(handler)
-        ws = rfc6455.connect(f"ws://127.0.0.1:{srv.port}/")
-        with self.assertRaises(rfc6455.WebSocketError):
-            ws.recv()
-        ws.close()
+        with FakeHA(handler) as srv:
+            ws = rfc6455.connect(f"ws://127.0.0.1:{srv.port}/")
+            try:
+                with self.assertRaises(rfc6455.WebSocketError):
+                    ws.recv()
+            finally:
+                ws.close()
 
     def test_cert_none_only_when_insecure_flag(self):
         # tls_insecure uses CERT_NONE; the default context verifies.
