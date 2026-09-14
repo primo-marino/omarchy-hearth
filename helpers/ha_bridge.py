@@ -1035,6 +1035,8 @@ def handle(cmd: dict[str, Any]) -> None:
         out["error"] = result["error"]
     if "data" in result:
         out["data"] = redact(result["data"])
+    if result.get("disconnected"):
+        out["disconnected"] = True
     emit(out)
 
 

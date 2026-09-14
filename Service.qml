@@ -83,6 +83,7 @@ Item {
   }
   readonly property string pillLabel: {
     if (!configured) return "Hearth"
+    if (!root.connected) return "Hearth"
     var power = EnergyJs.formatPower(root.energy && root.energy.solarPowerW)
     if (power) return power
     if (root.lightsOn > 0) return root.lightsOn + " on"
@@ -306,14 +307,16 @@ Item {
     var stale = []
     for (var k in pa) {
       if (!Object.prototype.hasOwnProperty.call(pa, k) || !pa[k]) continue
-      var ttl = pa[k].ttl || 2000
+      var ttl = pa[k].ttl || 16000
       if (now - pa[k].at >= ttl) stale.push(k)
     }
     var lost = root.connectionState !== "connected"
-    var why = lost ? "Disconnected from Home Assistant." : "Home Assistant did not respond."
     for (var i = 0; i < stale.length; i++) {
+      var rec = pa[stale[i]]
+      var helperOk = rec && rec.helperOk
+      var why = lost ? "Disconnected from Home Assistant." : (helperOk ? "" : "Home Assistant did not respond.")
       root.failAct(stale[i], why)
-      if (!lost) root.noteLost(why)
+      if (!lost && !helperOk) root.noteLost("Disconnected from Home Assistant.")
     }
   }
 
@@ -726,6 +729,8 @@ Item {
   function reloadFiles() {
     configFile.reload()
     stateFile.reload()
+    snapFile.reload()
+    Qt.callLater(function() { root.applySnapshot(snapFile.text()) })
     return "ok"
   }
 
