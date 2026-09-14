@@ -294,7 +294,7 @@ Panel {
             width: parent.width
             spacing: Style.space(8)
             Dropdown {
-              width: parent.width - addInstanceBtn.implicitWidth - parent.spacing
+              width: parent.width - syncBtn.implicitWidth - addInstanceBtn.implicitWidth - parent.spacing * 2
               showLabel: false
               label: ""
               value: service && service.config ? String(service.config.activeInstanceId || "") : ""
@@ -306,6 +306,12 @@ Panel {
                 if (String(v) === cur) return
                 if (service && service.setActiveId) service.setActiveId(v)
               }
+            }
+            Button {
+              id: syncBtn
+              text: "Sync"
+              foreground: root.foreground
+              onClicked: { if (service && service.fullSync) service.fullSync() }
             }
             Button {
               id: addInstanceBtn

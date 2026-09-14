@@ -505,7 +505,19 @@ Item {
 
   function refresh() {
     if (!configured) return
-    sendCmd({ cmd: "connect", instanceId: config.activeInstanceId }, null)
+    if (root.connectionState === "connected") root.fullSync()
+    else if (root.config.activeInstanceId)
+      sendCmd({ cmd: "connect", instanceId: root.config.activeInstanceId }, null)
+  }
+
+  function fullSync() {
+    if (!configured || !config.activeInstanceId) return { ok: false, error: "No instance." }
+    sendCmd({ cmd: "snapshot", instanceId: config.activeInstanceId }, function(msg) {
+      if (!msg || !msg.ok)
+        sendCmd({ cmd: "connect", instanceId: root.config.activeInstanceId }, null)
+    })
+    root.refreshEnergy(true)
+    return { ok: true }
   }
 
   function refreshEnergy(force) {
@@ -900,6 +912,7 @@ Item {
     function setSelection(payload: string): string { return root.setSelectionJson(payload) }
     function menuSync(): string { return root.menuSyncNow() }
     function addInstance(): string { root.beginAddInstance(); return "ok" }
+    function sync(): string { var r = root.fullSync(); return r && r.ok ? "ok" : "error" }
     function reload(): string { return root.reloadFiles() }
     function openPanel(): string {
       return (root.shell && root.shell.summon && root.shell.summon("hearth", "{}")) ? "ok" : "error"

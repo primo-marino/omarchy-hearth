@@ -954,6 +954,17 @@ def cmd_list_secrets(_cmd: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "data": {"ids": ids}}
 
 
+def cmd_snapshot(cmd: dict[str, Any]) -> dict[str, Any]:
+    instance_id = str(cmd.get("instanceId") or "")
+    with lock:
+        sess = sessions.get(instance_id)
+    if not sess:
+        return {"ok": False, "error": "not connected"}
+    sess._need_snapshot = True
+    sess._snap_at = 0.0
+    return {"ok": True}
+
+
 def cmd_energy(cmd: dict[str, Any]) -> dict[str, Any] | None:
     instance_id = str(cmd.get("instanceId") or "")
     cid = cmd.get("id")
@@ -982,6 +993,7 @@ HANDLERS = {
     "call": cmd_call,
     "listSecrets": cmd_list_secrets,
     "energy": cmd_energy,
+    "snapshot": cmd_snapshot,
 }
 
 

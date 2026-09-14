@@ -421,7 +421,21 @@ function build(config, snap) {
       lightsOn++
   }
 
-  function sortRows(list) {
+  function disambiguateNames(list) {
+  var counts = ({})
+  for (var i = 0; i < list.length; i++) {
+    var n = String(list[i].name || "")
+    counts[n] = (counts[n] || 0) + 1
+  }
+  for (var j = 0; j < list.length; j++) {
+    var name = String(list[j].name || "")
+    if (counts[name] > 1 && list[j].domain)
+      list[j].name = name + " (" + list[j].domain + ")"
+  }
+  return list
+}
+
+function sortRows(list) {
     list.sort(function(x, y) { return x.name.localeCompare(y.name) })
     return list
   }
@@ -430,11 +444,11 @@ function build(config, snap) {
   for (var b = 0; b < areaList.length; b++) {
     var id = areaList[b].area_id
     if (!areaAllowed(id, sel)) continue
-    var ents = sortRows(byArea[id] || [])
+    var ents = disambiguateNames(sortRows(byArea[id] || []))
     rooms.push({ area_id: id, name: areaList[b].name, count: ents.length, entities: ents })
   }
   if (sel.unassigned) {
-    var un = sortRows(byArea["unassigned"] || [])
+    var un = disambiguateNames(sortRows(byArea["unassigned"] || []))
     if (un.length > 0)
       rooms.push({ area_id: "unassigned", name: "Unassigned", count: un.length, entities: un })
   }

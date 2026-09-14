@@ -111,6 +111,17 @@ Column {
 
   Button {
     width: parent.width
+    text: "Sync now"
+    foreground: root.foreground
+    onClicked: {
+      if (!service || !service.fullSync) return
+      var result = service.fullSync()
+      root.statusMessage = result && result.ok ? "Syncing names and rooms from Home Assistant…" : (result && result.error ? result.error : "Sync failed.")
+    }
+  }
+
+  Button {
+    width: parent.width
     text: "Save rooms"
     foreground: root.foreground
     onClicked: {
