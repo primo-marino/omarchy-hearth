@@ -289,6 +289,19 @@ Panel {
             }
           }
 
+          Text {
+            visible: root.connectionState !== "connected"
+            width: parent.width
+            text: root.connectionState === "reconnecting"
+              ? "Reconnecting to Home Assistant. Controls are paused."
+              : "Disconnected from Home Assistant. Controls are paused."
+            color: Color.urgent
+            wrapMode: Text.WordWrap
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+
           Row {
             visible: !root.showSettings
             width: parent.width

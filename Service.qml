@@ -267,6 +267,24 @@ Item {
     return false
   }
 
+  function noteLost(reason) {
+    var text = String(reason || "Disconnected from Home Assistant.")
+    if (root.connectionState === "connected") {
+      root.connectionState = "disconnected"
+      root.lastError = text
+      root.notifyLoss()
+      root._prevConnection = "disconnected"
+    } else if (!root.lastError) {
+      root.lastError = text
+    }
+  }
+
+  function isLostError(err) {
+    var s = String(err || "").toLowerCase()
+    return s.indexOf("not connected") !== -1 || s.indexOf("timeout") !== -1 ||
+           s.indexOf("disconnected") !== -1 || s.indexOf("not responding") !== -1
+  }
+
   function failAct(entityId, err) {
     var eid = String(entityId || "")
     var pa = root.pendingActs
@@ -291,7 +309,12 @@ Item {
       var ttl = pa[k].ttl || 2000
       if (now - pa[k].at >= ttl) stale.push(k)
     }
-    for (var i = 0; i < stale.length; i++) root.failAct(stale[i], "No response")
+    var lost = root.connectionState !== "connected"
+    var why = lost ? "Disconnected from Home Assistant." : "Home Assistant did not respond."
+    for (var i = 0; i < stale.length; i++) {
+      root.failAct(stale[i], why)
+      if (!lost) root.noteLost(why)
+    }
   }
 
   function recordRecent(entityId) {
@@ -351,8 +374,12 @@ Item {
     var found = Entities.findEntity(root.rooms, eid)
     var svc = serviceName || Entities.primaryService(domain, kind, found ? found.state : "")
     if (!svc || !root.config.activeInstanceId) return { ok: false, error: "Nothing to call." }
+    if (!root.connected) {
+      root.noteLost("Disconnected from Home Assistant.")
+      return { ok: false, error: "Disconnected from Home Assistant." }
+    }
     var pa = root.pendingActs
-    pa[eid] = { kind: kind, at: Date.now(), ttl: kind === "toggle" ? 2000 : 16000 }
+    pa[eid] = { kind: kind, at: Date.now(), ttl: 16000 }
     root.pendingActs = pa
     root.pendingWatch = true
     if (kind === "toggle") {
@@ -396,9 +423,16 @@ Item {
           root.pendingActs = done
           root.pendingWatch = root.hasPendingActs()
           root.recordRecent(eid)
+        } else if (root.pendingActs[eid]) {
+          root.pendingActs[eid].helperOk = true
         }
       } else {
-        root.failAct(eid, msg && msg.error ? String(msg.error) : "Call failed.")
+        var err = msg && msg.error ? String(msg.error) : "Call failed."
+        if (msg && msg.disconnected || root.isLostError(err)) {
+          err = "Disconnected from Home Assistant."
+          root.noteLost(err)
+        }
+        root.failAct(eid, err)
       }
     })
     return { ok: true }

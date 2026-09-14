@@ -455,6 +455,7 @@ class HaSession:
         self._need_snapshot = False
         self._snap_at = 0.0
         self.outbox: queue.Queue = queue.Queue()
+        self._send_failed = None
         self.waiters: dict[int, tuple[threading.Event, dict[str, Any]]] = {}
         self._id_lock = threading.Lock()
 
@@ -464,7 +465,7 @@ class HaSession:
             return self.msg_id
 
     def rpc(self, payload: dict[str, Any], timeout: float = 20.0) -> dict[str, Any]:
-        if self.stop.is_set():
+        if self.stop.is_set() or not self.ws:
             return {"success": False, "error": {"code": "not_connected"}}
         mid = self.next_id()
         ev = threading.Event()
@@ -559,7 +560,8 @@ class HaSession:
                 body["id"] = self.next_id()
             try:
                 self.ws.send_text(json.dumps(body))
-            except OSError:
+            except OSError as e:
+                self._send_failed = e
                 return
 
     def _run(self) -> None:
@@ -585,31 +587,45 @@ class HaSession:
                         "type": "subscribe_events",
                         "event_type": ev,
                     }))
-                ping_at = time.monotonic() + 30
+                ping_at = time.monotonic() + 10
+                alive_until = time.monotonic() + 25
                 while not self.stop.is_set():
                     self.ws.sock.settimeout(0.2)
                     try:
                         self._flush_outbox()
+                        if self._send_failed:
+                            err = self._send_failed
+                            self._send_failed = None
+                            raise WebSocketClosed(1006, "send failed: %s" % err) from err
                         if not self.ws:
                             break
                         raw = self.ws.recv()
                     except TimeoutError:
                         if self.stop.is_set() or not self.ws:
                             break
+                        now = time.monotonic()
+                        if now >= alive_until:
+                            raise WebSocketClosed(1006, "Home Assistant not responding")
                         self._flush_outbox()
-                        if self._need_snapshot and time.monotonic() >= self._snap_at:
+                        if self._send_failed:
+                            err = self._send_failed
+                            self._send_failed = None
+                            raise WebSocketClosed(1006, "send failed: %s" % err) from err
+                        if self._need_snapshot and now >= self._snap_at:
                             self._need_snapshot = False
                             self._snapshot(include_services=False, reason="registry")
-                        if time.monotonic() >= ping_at:
+                            alive_until = time.monotonic() + 25
+                        if now >= ping_at:
                             self.call({"type": "ping"})
                             self._flush_outbox()
-                            ping_at = time.monotonic() + 30
+                            ping_at = now + 10
                         continue
                     except OSError as e:
                         if self.stop.is_set():
                             break
                         raise WebSocketClosed(1006, "socket errno %s" % e.errno) from e
                     msg = json.loads(raw)
+                    alive_until = time.monotonic() + 25
                     mid = msg.get("id")
                     waiter = None
                     if mid is not None:
@@ -633,7 +649,8 @@ class HaSession:
                             self._need_snapshot = True
                             self._snap_at = time.monotonic() + 2.0
                     elif msg.get("type") == "pong":
-                        ping_at = time.monotonic() + 30
+                        ping_at = time.monotonic() + 10
+                        alive_until = time.monotonic() + 25
             except WebSocketClosed as e:
                 if self.stop.is_set():
                     break
@@ -936,8 +953,8 @@ def cmd_call(cmd: dict[str, Any]) -> dict[str, Any]:
     instance_id = str(cmd.get("instanceId") or "")
     with lock:
         sess = sessions.get(instance_id)
-    if not sess:
-        return {"ok": False, "error": "not connected"}
+    if not sess or not sess.ws or sess.stop.is_set():
+        return {"ok": False, "error": "not connected", "disconnected": True}
     payload = sanitize_call_payload(cmd.get("payload"))
     if not payload:
         return {"ok": False, "error": "only call_service for a valid entity is allowed"}

@@ -14,7 +14,9 @@ Item {
   readonly property string kind: entity && entity.kind ? String(entity.kind) : ""
   readonly property string domain: entity && entity.domain ? String(entity.domain) : ""
   readonly property var attrs: entity && entity.attrs ? entity.attrs : ({})
+  readonly property bool live: !!(service && service.connected)
   readonly property bool unavailable: {
+    if (!live) return true
     var st = entity && entity.state ? String(entity.state) : ""
     return st === "unavailable" || st === "unknown"
   }
@@ -40,7 +42,7 @@ Item {
 
   function run(svcName, data) {
     root.touched()
-    if (root.unavailable) return
+    if (!root.live || root.unavailable) return
     if (root.service && root.service.actOnEntity)
       root.service.actOnEntity(root.entity.entity_id, svcName || root.entity.service, data)
   }
