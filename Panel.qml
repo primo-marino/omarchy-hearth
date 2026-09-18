@@ -272,11 +272,10 @@ Panel {
               foreground: root.foreground
               fontFamily: root.fontFamily
               iconComponent: Component {
-                Text {
-                  textFormat: Text.PlainText
-                  text: "󰋜"
+                HearthIcon {
+                  iconSize: Style.font.display
                   color: root.connectionState === "connected" ? root.foreground : root.dim
-                  font.pixelSize: Style.font.display
+                  lit: root.connectionState === "connected"
                 }
               }
               trailingControl: Component {

@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "qml"
 
 BarWidget {
   id: root
@@ -8,12 +9,22 @@ BarWidget {
 
   readonly property var svc: bar && bar.shell && bar.shell.serviceFor ? bar.shell.serviceFor("hearth") : null
   readonly property bool connected: svc ? svc.connected === true : false
-  readonly property string pillLabel: {
-    if (svc && svc.pillLabel) return String(svc.pillLabel)
-    return "Hearth"
-  }
+  readonly property int lightsOn: svc && svc.lightsOn ? Number(svc.lightsOn) : 0
+  readonly property string countText: (connected && lightsOn > 0) ? String(lightsOn) : ""
   readonly property color pillColor: connected ? (bar ? bar.barForeground : Color.foreground)
                                                : Qt.darker(bar ? bar.barForeground : Color.foreground, 1.55)
+  readonly property string tipText: {
+    if (!svc || !svc.configured) return "Hearth — click to set up"
+    if (!connected) return "Disconnected from Home Assistant"
+    var bits = []
+    if (lightsOn > 0) bits.push(lightsOn + " on")
+    if (svc.energy && isFinite(Number(svc.energy.solarPowerW)) && Number(svc.energy.solarPowerW) > 0) {
+      var w = Number(svc.energy.solarPowerW)
+      bits.push(w >= 1000 ? ((Math.round(w / 100) / 10) + " kW") : (Math.round(w) + " W"))
+    }
+    if (bits.length) return bits.join(" · ")
+    return svc.activeName ? String(svc.activeName) : "Hearth"
+  }
 
   function injectPanel() {
     var target = panelLoader.item
@@ -51,8 +62,8 @@ BarWidget {
   }
 
   visible: true
-  implicitWidth: button.implicitWidth
-  implicitHeight: button.implicitHeight
+  implicitWidth: chip.implicitWidth
+  implicitHeight: chip.implicitHeight
 
   onBarChanged: injectPanel()
   onSettingsChanged: injectPanel()
@@ -69,22 +80,53 @@ BarWidget {
     }
   }
 
-  WidgetButton {
-    id: button
-    anchors.fill: parent
-    bar: root.bar
-    text: root.pillLabel
-    foreground: root.pillColor
-    tooltipText: ""
-    onPressed: function(b) {
-      if (!root.bar) return
-      if (b === Qt.RightButton) {
-        if (root.svc) root.svc.showSettings = true
-        root.togglePanel()
-      } else if (b === Qt.MiddleButton) {
-        root.refresh()
-      } else {
-        root.togglePanel()
+  Item {
+    id: chip
+    implicitWidth: row.implicitWidth + Style.space(10)
+    implicitHeight: bar ? bar.barSize : Style.bar.sizeHorizontal
+
+    Row {
+      id: row
+      anchors.centerIn: parent
+      spacing: Style.space(5)
+
+      HearthIcon {
+        iconSize: Style.space(13)
+        color: root.pillColor
+        lit: root.connected
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        visible: root.countText !== ""
+        text: root.countText
+        color: root.pillColor
+        font.family: bar ? bar.fontFamily : Style.font.family
+        font.pixelSize: Style.font.body
+        renderType: Text.NativeRendering
+        anchors.verticalCenter: parent.verticalCenter
+      }
+    }
+
+    WidgetButton {
+      id: button
+      anchors.fill: parent
+      bar: root.bar
+      text: ""
+      labelVisible: false
+      hasVisualContent: true
+      tooltipText: root.tipText
+      dimmed: !root.connected && !!(root.svc && root.svc.configured)
+      onPressed: function(b) {
+        if (!root.bar) return
+        if (b === Qt.RightButton) {
+          if (root.svc) root.svc.showSettings = true
+          root.togglePanel()
+        } else if (b === Qt.MiddleButton) {
+          root.refresh()
+        } else {
+          root.togglePanel()
+        }
       }
     }
   }
