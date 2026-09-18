@@ -105,3 +105,7 @@ Lovelace clone, cameras, Frigate, HA subpaths, alarm panels that require a code,
 
 MIT. See [LICENSE](LICENSE).
 
+
+## Support
+
+See [SUPPORT.md](SUPPORT.md) for expectations (best-effort, no SLA).

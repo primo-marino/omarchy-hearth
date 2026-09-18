@@ -1,0 +1,38 @@
+name: Bug report
+description: Something in Hearth is broken
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please read [SUPPORT.md](../SUPPORT.md). This is a best-effort project with no SLA.
+        **Never paste tokens or secrets.**
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Expected vs actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps.
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Omarchy / Hearth commit or version, Home Assistant version, OS.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Redact secrets. Optional.
+    validations:
+      required: false

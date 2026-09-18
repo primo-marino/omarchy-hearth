@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest an improvement (may be closed without implementing)
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests are welcome for prioritization, but there is **no commitment** to build them.
+        See [SUPPORT.md](../SUPPORT.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that Hearth does not support well?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Ideal behavior. Keep it short.
+    validations:
+      required: true
+  - type: dropdown
+    id: willing
+    attributes:
+      label: Would you consider contributing a PR?
+      options:
+        - "No"
+        - "Maybe"
+        - "Yes"
+    validations:
+      required: true

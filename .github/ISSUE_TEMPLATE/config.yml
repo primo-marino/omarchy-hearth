@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Omarchy / Home Assistant general help
+    url: https://github.com/basecamp/omarchy
+    about: Questions about Omarchy itself or HA basics belong upstream, not in Hearth.
