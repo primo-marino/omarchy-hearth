@@ -219,6 +219,14 @@ class BridgeUnitTests(unittest.TestCase):
             "type": "call_service", "domain": "light;id", "service": "turn_on",
             "target": {"entity_id": "light.kitchen"},
         }))
+        self.assertIsNone(ha_bridge.sanitize_call_payload({
+            "type": "call_service", "domain": "homeassistant", "service": "restart",
+            "target": {"entity_id": "homeassistant.ha"},
+        }))
+        self.assertIsNone(ha_bridge.sanitize_call_payload({
+            "type": "call_service", "domain": "light", "service": "toggle",
+            "target": {"entity_id": "switch.kitchen"},
+        }))
 
     def test_redact_strips_tokens(self):
         import ha_bridge
@@ -228,6 +236,80 @@ class BridgeUnitTests(unittest.TestCase):
         self.assertEqual(out["kind"], "llat")
         self.assertNotIn("password", out["nested"])
         self.assertEqual(out["nested"]["haVersion"], "1")
+
+    def test_slim_entity_keeps_power_unit(self):
+        import ha_bridge
+
+        slim = ha_bridge.slim_entity({
+            "entity_id": "sensor.solar_power",
+            "state": "1.2",
+            "attributes": {"unit_of_measurement": "kW", "friendly_name": "Solar"},
+        })
+        self.assertEqual(slim["attributes"]["unit_of_measurement"], "kW")
+
+    def test_filter_actionable_after_hide(self):
+        import ha_bridge
+
+        states = [{"entity_id": "sensor.noise_%s" % i, "state": "1"} for i in range(20)]
+        states.append({"entity_id": "light.kitchen", "state": "on"})
+        entities = [{"entity_id": s["entity_id"]} for s in states]
+        entities[-1]["entity_category"] = None
+        out, regs = ha_bridge.filter_actionable_states(states, entities, cap=5)
+        self.assertEqual([s["entity_id"] for s in out], ["light.kitchen"])
+        hidden = ha_bridge.filter_actionable_states(
+            [{"entity_id": "light.hidden", "state": "on"}],
+            [{"entity_id": "light.hidden", "entity_category": "diagnostic"}],
+        )
+        self.assertEqual(hidden[0], [])
+
+    def test_instance_id_and_origin(self):
+        import ha_bridge
+
+        self.assertTrue(ha_bridge.valid_instance_id("home-2"))
+        self.assertFalse(ha_bridge.valid_instance_id("../etc"))
+        self.assertFalse(ha_bridge.valid_instance_id("foo/bar"))
+        self.assertTrue(ha_bridge.valid_origin("http://127.0.0.1:8123"))
+        self.assertFalse(ha_bridge.valid_origin("file:///etc/passwd"))
+        self.assertFalse(ha_bridge.valid_origin("http://evil\nHost: x"))
+
+    def test_http_json_refuses_redirect(self):
+        import ha_bridge
+
+        def handler(conn):
+            read_http(conn)
+            conn.sendall(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1/stolen\r\nContent-Length: 0\r\n\r\n")
+
+        with FakeHA(handler) as srv:
+            code, _body = ha_bridge.http_json(
+                "GET",
+                "http://127.0.0.1:%s/api/" % srv.port,
+                headers={"Authorization": "Bearer secret-token"},
+            )
+            self.assertEqual(code, 302)
+
+    def test_lock_cover_follow_state(self):
+        import ha_bridge
+
+        self.assertEqual(ha_bridge.service_for_state("lock.front", "locked"), "unlock")
+        self.assertEqual(ha_bridge.service_for_state("lock.front", "unlocked"), "lock")
+        self.assertEqual(ha_bridge.service_for_state("lock.front", ""), "")
+        self.assertEqual(ha_bridge.service_for_state("cover.garage", "open"), "close_cover")
+        self.assertEqual(ha_bridge.service_for_state("cover.garage", "closed"), "open_cover")
+
+
+class Rfc6455TestsExtra(unittest.TestCase):
+    def test_reject_oversize_ping(self):
+        def handler(conn):
+            accept_upgrade(conn)
+            conn.sendall(rfc6455.encode_frame_for_tests(rfc6455.OP_PING, b"x" * 126))
+
+        with FakeHA(handler) as srv:
+            ws = rfc6455.connect(f"ws://127.0.0.1:{srv.port}/")
+            try:
+                with self.assertRaises(rfc6455.WebSocketError):
+                    ws.recv()
+            finally:
+                ws.close()
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import ha_bridge
 import menu_sync
 
 HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
@@ -60,9 +61,11 @@ def primary_service(entity_id: str, service: str) -> str:
     if domain in ACTIVATE:
         return "turn_on"
     if domain == "lock":
-        return "unlock"
+        return ""
     if domain == "cover":
-        return "open_cover"
+        return ""
+    if domain == "valve":
+        return ""
     if domain == "fan":
         return "toggle"
     if domain == "media_player":
@@ -73,7 +76,7 @@ def primary_service(entity_id: str, service: str) -> str:
 
 
 def ipc(method: str, *args: str) -> tuple[int, str]:
-    cmd = ["omarchy-shell", "hearth", method, *args]
+    cmd = ["omarchy-shell", "io.github.primo-marino.hearth", method, *args]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
     except FileNotFoundError:
@@ -93,7 +96,7 @@ def shell_running() -> bool:
 
 SERVICE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 INSTANCE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-ROOM_RE = re.compile(r"^[a-z0-9_]{1,64}$")
+ROOM_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 
 
 def rest_act(entity_id: str, service: str, data: dict | None = None) -> dict:
@@ -107,37 +110,44 @@ def rest_act(entity_id: str, service: str, data: dict | None = None) -> dict:
             break
     rec = (secrets.get("instances") or {}).get(iid) or {}
     token = rec.get("accessToken") or rec.get("access_token")
-    origin = (inst or {}).get("url") or ""
-    if not token or not origin:
+    origin = str((inst or {}).get("url") or "")
+    if not token or not ha_bridge.valid_origin(origin):
         return {"ok": False, "error": "No saved instance token."}
     domain = domain_of(entity_id)
+    if domain not in ha_bridge.ALLOWED_DOMAINS or domain != domain_of(entity_id):
+        return {"ok": False, "error": "Bad service."}
     if not SERVICE_RE.match(domain) or not SERVICE_RE.match(service):
         return {"ok": False, "error": "Bad service."}
     url = origin.rstrip("/") + "/api/services/%s/%s" % (
         urllib.parse.quote(domain, safe=""),
         urllib.parse.quote(service, safe=""),
     )
+    body = ha_bridge.safe_service_data(data or {})
+    body["entity_id"] = entity_id
     req = urllib.request.Request(
         url,
-        data=json.dumps(dict({"entity_id": entity_id}, **(data or {}))).encode("utf-8"),
+        data=json.dumps(body).encode("utf-8"),
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
         method="POST",
     )
     tls = bool((inst or {}).get("tlsInsecure"))
     ctx = None
     if origin.lower().startswith("https://"):
-        if tls:
-            ctx = ssl._create_unverified_context()
-        else:
-            ctx = ssl.create_default_context()
+        ctx = ssl._create_unverified_context() if tls else ssl.create_default_context()
+    handlers: list = [ha_bridge.NoRedirectHandler()]
+    if ctx is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+    opener = urllib.request.build_opener(*handlers)
     try:
-        with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
-            raw = resp.read()
+        with opener.open(req, timeout=12) as resp:
+            raw = ha_bridge.read_capped(resp)
             code = resp.getcode()
     except urllib.error.HTTPError as e:
         return {"ok": False, "error": "HTTP %s" % e.code}
     except urllib.error.URLError as e:
         return {"ok": False, "error": str(e.reason)}
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e)}
     return {"ok": 200 <= code < 300, "http": code, "body": raw.decode("utf-8", "replace")[:500]}
 
 
@@ -162,7 +172,8 @@ def parse_act_data(service: str, extra: str) -> dict | None:
     try:
         parsed = json.loads(extra)
         if isinstance(parsed, dict):
-            return parsed
+            cleaned = ha_bridge.safe_service_data(parsed)
+            return cleaned or None
     except json.JSONDecodeError:
         pass
     try:
@@ -176,23 +187,53 @@ def parse_act_data(service: str, extra: str) -> dict | None:
     return None
 
 
+def cache_entity_state(entity_id: str) -> str:
+    cfg = read_json(CONFIG_PATH, {})
+    iid = str(cfg.get("activeInstanceId") or "")
+    if not ha_bridge.valid_instance_id(iid):
+        return ""
+    snap = read_json(os.path.join(CACHE_DIR, "entities", iid + ".json"), {})
+    for st in snap.get("states") or []:
+        if isinstance(st, dict) and str(st.get("entity_id") or "") == entity_id:
+            return str(st.get("state") or "")
+    return ""
+
+
+def service_from_state(entity_id: str, state: str) -> str:
+    return ha_bridge.service_for_state(entity_id, state) or primary_service(entity_id, "")
+
+
 def cmd_act(entity_id: str, service: str, extra: str = "") -> int:
     if not entity_id or not re_entity(entity_id):
         sys.stderr.write("Bad entity id.\n")
         return 1
-    svc = primary_service(entity_id, service)
-    if not SERVICE_RE.match(svc):
+    domain = domain_of(entity_id)
+    if domain not in ha_bridge.ALLOWED_DOMAINS:
+        sys.stderr.write("Bad entity id.\n")
+        return 1
+    user_svc = service.strip() if service else ""
+    if user_svc and not SERVICE_RE.match(user_svc):
         sys.stderr.write("Bad service.\n")
         return 1
-    data = parse_act_data(svc, extra)
-    payload_obj = {"entity_id": entity_id, "service": svc}
+    data = parse_act_data(user_svc, extra)
+    payload_obj: dict = {"entity_id": entity_id}
+    if user_svc:
+        payload_obj["service"] = user_svc
+    elif domain not in ("lock", "cover", "valve"):
+        payload_obj["service"] = primary_service(entity_id, "")
+        if not SERVICE_RE.match(payload_obj["service"]):
+            sys.stderr.write("Bad service.\n")
+            return 1
     if data:
         payload_obj["service_data"] = data
-    payload = json.dumps(payload_obj)
     if shell_running():
-        code, out = ipc("act", payload)
+        code, out = ipc("act", json.dumps(payload_obj))
         sys.stdout.write((out or "") + "\n")
         return 0 if code == 0 else 1
+    svc = str(payload_obj.get("service") or service_from_state(entity_id, cache_entity_state(entity_id)))
+    if not svc or not SERVICE_RE.match(svc):
+        sys.stderr.write("Don't know the current state for this device.\n")
+        return 1
     result = rest_act(entity_id, svc, data)
     sys.stdout.write(json.dumps(result) + "\n")
     return 0 if result.get("ok") else 1

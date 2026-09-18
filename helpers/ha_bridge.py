@@ -55,9 +55,20 @@ CACHE_DIR = os.path.join(HOME, ".cache", "omarchy", "hearth", "entities")
 SECRETS_PATH = os.path.join(CONFIG_DIR, "secrets.json")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 JSON_LINE_CAP = 256 * 1024
+HTTP_BODY_CAP = 2 * 1024 * 1024
+ENTITY_CAP = 5000
 LLAT_LIFESPAN_DAYS = 3650
 ENTITY_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 SLUG_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+INSTANCE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+ALLOWED_DOMAINS = frozenset({
+    "light", "switch", "fan", "input_boolean", "siren",
+    "scene", "script", "button", "automation", "input_button",
+    "cover", "valve", "lock",
+    "climate", "media_player",
+    "vacuum", "remote", "humidifier", "water_heater", "lawn_mower",
+    "alarm_control_panel",
+})
 ATTR_KEEP = (
     "friendly_name",
     "brightness",
@@ -86,6 +97,7 @@ ATTR_KEEP = (
     "max_humidity",
     "code_arm_required",
     "code_disarm_required",
+    "unit_of_measurement",
 )
 
 lock = threading.Lock()
@@ -123,6 +135,93 @@ def redact(obj: Any) -> Any:
     if isinstance(obj, list):
         return [redact(x) for x in obj]
     return obj
+
+
+def valid_instance_id(instance_id: str) -> bool:
+    if not INSTANCE_RE.match(instance_id or ""):
+        return False
+    return "/" not in instance_id and "\\" not in instance_id and ".." not in instance_id
+
+
+def service_for_state(entity_id: str, state: str) -> str:
+    """Pick lock/cover/valve service from HA state. Empty if unknown."""
+    domain = str(entity_id or "").split(".", 1)[0]
+    st = str(state or "")
+    if domain == "lock":
+        if not st:
+            return ""
+        return "lock" if st in ("unlocked", "unlocking") else "unlock"
+    if domain == "cover":
+        if not st:
+            return ""
+        return "close_cover" if st in ("open", "opening") else "open_cover"
+    if domain == "valve":
+        if not st:
+            return ""
+        return "close_valve" if st in ("open", "opening") else "open_valve"
+    return ""
+
+
+def valid_origin(origin: str) -> bool:
+    if not origin or any(ch in origin for ch in " \r\n\t"):
+        return False
+    lower = origin.lower()
+    return lower.startswith("http://") or lower.startswith("https://")
+
+
+def registry_hidden(reg: Any) -> bool:
+    if not isinstance(reg, dict):
+        return False
+    if reg.get("disabled_by") or reg.get("hidden_by"):
+        return True
+    return reg.get("entity_category") in ("config", "diagnostic")
+
+
+def filter_actionable_states(states: Any, entities: Any, cap: int = ENTITY_CAP) -> tuple[list, list]:
+    """Hide-filters first, then cap. Sensors and other non-actionable domains drop out."""
+    regs: dict[str, dict[str, Any]] = {}
+    if isinstance(entities, list):
+        for ent in entities:
+            if isinstance(ent, dict) and ent.get("entity_id"):
+                regs[str(ent["entity_id"])] = ent
+    out_states: list[dict[str, Any]] = []
+    if not isinstance(states, list):
+        return [], []
+    for st in states:
+        if not isinstance(st, dict):
+            continue
+        eid = str(st.get("entity_id") or "")
+        if not ENTITY_RE.match(eid):
+            continue
+        domain = eid.split(".", 1)[0]
+        if domain not in ALLOWED_DOMAINS:
+            continue
+        if registry_hidden(regs.get(eid)):
+            continue
+        out_states.append(st)
+        if len(out_states) >= cap:
+            break
+    keep = {str(s.get("entity_id")) for s in out_states}
+    out_regs = [regs[k] for k in keep if k in regs]
+    return out_states, out_regs
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def http_error_302(self, req, fp, code, msg, headers):
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+
+def read_capped(fp, cap: int = HTTP_BODY_CAP) -> bytes:
+    if fp is None:
+        return b""
+    data = fp.read(cap + 1)
+    if data is None:
+        return b""
+    if len(data) > cap:
+        raise RuntimeError("HTTP response too large")
+    return data
 
 
 def ensure_dirs() -> None:
@@ -260,6 +359,9 @@ def sanitize_call_payload(payload: Any) -> Optional[dict[str, Any]]:
     entity_id = str((target or {}).get("entity_id") or payload.get("entity_id") or "")
     if not ENTITY_RE.match(entity_id):
         return None
+    entity_domain = entity_id.split(".", 1)[0]
+    if domain != entity_domain or domain not in ALLOWED_DOMAINS:
+        return None
     clean: dict[str, Any] = {
         "type": "call_service",
         "domain": domain,
@@ -291,13 +393,23 @@ def http_json(method: str, url: str, tls_insecure: bool = False, headers: Option
         hdrs.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     ctx = ssl_context(tls_insecure) if url.startswith("https:") else None
+    handlers: list[Any] = [NoRedirectHandler()]
+    if ctx is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+    opener = urllib.request.build_opener(*handlers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            raw = resp.read()
+        with opener.open(req, timeout=timeout) as resp:
+            raw = read_capped(resp)
             code = resp.getcode()
     except urllib.error.HTTPError as e:
-        raw = e.read() if e.fp else b""
-        code = e.code
+        try:
+            raw = read_capped(e) if e.fp else b""
+            code = e.code
+        finally:
+            try:
+                e.close()
+            except Exception:
+                pass
     except urllib.error.URLError as e:
         raise RuntimeError("connection failed: %s" % e.reason) from e
     text = raw.decode("utf-8", "replace") if raw else ""
@@ -459,6 +571,10 @@ class HaSession:
         self.waiters: dict[int, tuple[threading.Event, dict[str, Any]]] = {}
         self._id_lock = threading.Lock()
 
+    def _is_current(self) -> bool:
+        with lock:
+            return sessions.get(self.instance_id) is self
+
     def next_id(self) -> int:
         with self._id_lock:
             self.msg_id += 1
@@ -569,8 +685,26 @@ class HaSession:
         while not self.stop.is_set():
             try:
                 self.ws, self.ha_version = ws_auth(self.origin, self.token, self.tls_insecure)
+                if self.stop.is_set() or not self._is_current():
+                    ws = self.ws
+                    self.ws = None
+                    if ws:
+                        try:
+                            ws.close()
+                        except OSError:
+                            pass
+                    break
                 backoff = 1
                 cfg = ws_get_config(self.ws, self.next_id)
+                if self.stop.is_set() or not self._is_current():
+                    ws = self.ws
+                    self.ws = None
+                    if ws:
+                        try:
+                            ws.close()
+                        except OSError:
+                            pass
+                    break
                 self.time_zone = str(cfg.get("time_zone") or "")
                 emit({
                     "event": "connection",
@@ -652,25 +786,26 @@ class HaSession:
                         ping_at = time.monotonic() + 10
                         alive_until = time.monotonic() + 25
             except WebSocketClosed as e:
-                if self.stop.is_set():
+                if self.stop.is_set() or not self._is_current():
                     break
                 emit({"event": "connection", "instanceId": self.instance_id, "state": "reconnecting",
                       "error": str(e)})
             except OSError as e:
-                if self.stop.is_set():
+                if self.stop.is_set() or not self._is_current():
                     break
                 emit({"event": "connection", "instanceId": self.instance_id, "state": "reconnecting",
                       "error": str(e)})
             except Exception as e:
-                if self.stop.is_set():
+                if self.stop.is_set() or not self._is_current():
                     break
                 emit({"event": "connection", "instanceId": self.instance_id, "state": "reconnecting",
                       "error": str(e)})
-            if self.stop.is_set():
+            if self.stop.is_set() or not self._is_current():
                 break
             time.sleep(backoff)
             backoff = min(30, backoff * 2 if backoff >= 2 else (2 if backoff == 1 else 5))
-        emit({"event": "connection", "instanceId": self.instance_id, "state": "disconnected"})
+        if self._is_current():
+            emit({"event": "connection", "instanceId": self.instance_id, "state": "disconnected"})
 
     def _set_sock_timeout(self, seconds: float) -> None:
         if not self.ws or not getattr(self.ws, "sock", None):
@@ -734,6 +869,7 @@ class HaSession:
                     break
         self.last_states = states if isinstance(states, list) else []
         self.last_services = services if isinstance(services, dict) else {}
+        cached_states, cached_entities = filter_actionable_states(states, entities)
         path = os.path.join(CACHE_DIR, "%s.json" % self.instance_id)
         fetched = datetime.now(timezone.utc).isoformat()
         payload = {
@@ -741,8 +877,8 @@ class HaSession:
             "fetchedAt": fetched,
             "areas": areas,
             "devices": devices,
-            "entities": entities[:5000],
-            "states": states[:5000],
+            "entities": cached_entities,
+            "states": cached_states,
             "services": services,
         }
         atomic_write(path, json.dumps(payload), 0o600)
@@ -752,14 +888,16 @@ class HaSession:
             "path": path,
             "fetchedAt": fetched,
             "reason": reason,
-            "entityCount": min(len(states), 5000),
+            "entityCount": len(cached_states),
             "areaCount": len(areas),
         })
         # extra registry subscriptions happen once after first snapshot in _run
 
 
 def cmd_providers(cmd: dict[str, Any]) -> dict[str, Any]:
-    origin = cmd.get("url") or ""
+    origin = str(cmd.get("url") or "")
+    if not valid_origin(origin):
+        return {"ok": True, "data": {"passwordAvailable": False}}
     tls = bool(cmd.get("tlsInsecure"))
     try:
         code, body = http_json("GET", origin.rstrip("/") + "/auth/providers", tls_insecure=tls)
@@ -870,9 +1008,9 @@ def cmd_login(cmd: dict[str, Any]) -> dict[str, Any]:
     instance_id = str(cmd.get("instanceId") or "")
     origin = str(cmd.get("url") or "")
     tls = bool(cmd.get("tlsInsecure"))
-    if not instance_id:
+    if not valid_instance_id(instance_id):
         return {"ok": False, "error": "login requires instanceId"}
-    if not origin:
+    if not valid_origin(origin):
         return {"ok": False, "error": "login requires url"}
     try:
         if cmd.get("token"):
@@ -904,10 +1042,10 @@ def cmd_login(cmd: dict[str, Any]) -> dict[str, Any]:
 
 def cmd_connect(cmd: dict[str, Any]) -> dict[str, Any]:
     instance_id = str(cmd.get("instanceId") or "")
-    if not instance_id:
+    if not valid_instance_id(instance_id):
         return {"ok": False, "error": "connect requires instanceId"}
     rec = secret_for(instance_id)
-    token = (rec or {}).get("accessToken") or os.environ.get("HEARTH_TOKEN")
+    token = (rec or {}).get("accessToken")
     if not token:
         return {"ok": False, "error": "No token for this instance."}
     cfg = load_config()
@@ -918,7 +1056,7 @@ def cmd_connect(cmd: dict[str, Any]) -> dict[str, Any]:
             break
     origin = str(cmd.get("url") or (inst or {}).get("url") or "")
     tls = bool(cmd.get("tlsInsecure") if "tlsInsecure" in cmd else (inst or {}).get("tlsInsecure"))
-    if not origin:
+    if not valid_origin(origin):
         return {"ok": False, "error": "No URL for this instance."}
     with lock:
         old = sessions.get(instance_id)

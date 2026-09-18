@@ -58,6 +58,13 @@ function findInstance(config, id) {
   return null
 }
 
+function setActiveInstance(config, id) {
+  var next = { version: 1, activeInstanceId: String(id || ""), instances: [] }
+  var list = config && config.instances ? config.instances : []
+  for (var i = 0; i < list.length; i++) next.instances.push(list[i])
+  return next
+}
+
 function upsertInstance(config, inst) {
   var next = {
     version: 1,

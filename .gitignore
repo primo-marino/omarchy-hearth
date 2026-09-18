@@ -2,3 +2,12 @@ __pycache__/
 *.pyc
 *.tmp
 .pytest_cache/
+
+# Local / private — do not publish
+STATUS.md
+TESTPLAN.md
+DESIGN.md
+_aim-*.md
+_aim-*-meta.json
+_qwen-*.md
+florida-aim-prompt.txt

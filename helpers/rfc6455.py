@@ -160,6 +160,8 @@ class WebSocketClient:
             length = struct.unpack("!H", self._need(2))[0]
         elif length == 127:
             length = struct.unpack("!Q", self._need(8))[0]
+        if opcode in (OP_CLOSE, OP_PING, OP_PONG) and length > 125:
+            raise WebSocketError("control frame exceeds 125 bytes")
         if length > MAX_FRAME:
             raise WebSocketError(f"inbound frame {length} exceeds 32 MiB")
         mask = self._need(4) if masked else b""
@@ -220,9 +222,10 @@ def _upgrade(sock, parsed, host, port, path, tls_insecure, timeout):
         sock = ctx.wrap_socket(sock, server_hostname=host)
 
     key = base64.b64encode(os.urandom(16)).decode("ascii")
+    host_header = f"[{host}]:{port}" if ":" in str(host) else f"{host}:{port}"
     req = (
         f"GET {path} HTTP/1.1\r\n"
-        f"Host: {host}:{port}\r\n"
+        f"Host: {host_header}\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         f"Sec-WebSocket-Key: {key}\r\n"

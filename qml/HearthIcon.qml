@@ -18,7 +18,7 @@ Item {
   Shape {
     anchors.fill: parent
     antialiasing: true
-    preferredRendererType: Shape.CurveRenderer
+    preferredRendererType: Shape.GeometryRenderer
 
     ShapePath {
       fillColor: "transparent"

@@ -5,12 +5,12 @@ import "qml"
 
 BarWidget {
   id: root
-  moduleName: "hearth"
+  moduleName: "io.github.primo-marino.hearth"
 
-  readonly property var svc: bar && bar.shell && bar.shell.serviceFor ? bar.shell.serviceFor("hearth") : null
+  readonly property var svc: bar && bar.shell && bar.shell.serviceFor ? bar.shell.serviceFor("io.github.primo-marino.hearth") : null
   readonly property bool connected: svc ? svc.connected === true : false
   readonly property int lightsOn: svc && svc.lightsOn ? Number(svc.lightsOn) : 0
-  readonly property string countText: (connected && lightsOn > 0) ? String(lightsOn) : ""
+  readonly property string countText: (connected && lightsOn > 0) ? (lightsOn + " on") : ""
   readonly property color pillColor: connected ? (bar ? bar.barForeground : Color.foreground)
                                                : Qt.darker(bar ? bar.barForeground : Color.foreground, 1.55)
   readonly property string tipText: {
@@ -87,6 +87,7 @@ BarWidget {
 
     Row {
       id: row
+      z: 1
       anchors.centerIn: parent
       spacing: Style.space(5)
 
@@ -110,11 +111,13 @@ BarWidget {
 
     WidgetButton {
       id: button
+      z: 2
       anchors.fill: parent
       bar: root.bar
       text: ""
       labelVisible: false
       hasVisualContent: true
+      opacity: 0.01
       tooltipText: root.tipText
       dimmed: !root.connected && !!(root.svc && root.svc.configured)
       onPressed: function(b) {

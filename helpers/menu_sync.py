@@ -86,7 +86,7 @@ def merge_hearth(existing: dict[str, Any], tree: dict[str, Any]) -> dict[str, An
 def disconnected_tree(cli: str) -> dict[str, Any]:
     return {
         "hearth": {"icon": "󰋜", "label": "Hearth", "aliases": ["home assistant", "ha"]},
-        "hearth.open": {"icon": "󰏥", "label": "Open Hearth", "action": "omarchy-shell shell summon hearth"},
+        "hearth.open": {"icon": "󰏥", "label": "Open Hearth", "action": "omarchy-shell shell summon io.github.primo-marino.hearth"},
         "hearth.add": {"icon": "", "label": "Add Home Assistant", "action": "%s onboard" % cli},
         "hearth.status": {
             "icon": "󰋜",

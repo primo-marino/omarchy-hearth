@@ -2,10 +2,11 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 import "qml"
+import "js/Entities.js" as Entities
 
 Panel {
   id: root
-  moduleName: "hearth"
+  moduleName: "io.github.primo-marino.hearth"
   ipcTarget: ""
   manageIpc: false
 
@@ -15,6 +16,7 @@ Panel {
   property bool openedFromHotkey: false
   property bool cursorActive: false
   property string tab: "rooms"
+  property bool pinOnTab: false
   property string focusedEntityId: ""
   property bool filterOpen: false
   property string filterQuery: ""
@@ -28,11 +30,26 @@ Panel {
   readonly property bool showOnboard: !configured || addingInstance
   readonly property bool showSettings: service ? service.showSettings === true : false
   readonly property string connectionState: service ? String(service.connectionState || "idle") : "idle"
+  readonly property var onNowEntities: Entities.onNowList(service && service.rooms ? service.rooms : [])
   readonly property string heroMeta: {
     if (connectionState === "reconnecting") return "Reconnecting…"
     if (service && service.lastError && connectionState !== "connected") return String(service.lastError)
-    if (connectionState === "connected") return (service && service.locationName) ? String(service.locationName) : "Online"
+    if (connectionState === "connected") {
+      var loc = (service && service.locationName) ? String(service.locationName) : "Online"
+      var n = root.onNowEntities.length
+      if (n > 0) return loc + " · " + n + " on"
+      return loc
+    }
     return connectionState
+  }
+  readonly property var tabOptions: {
+    var opts = []
+    var n = root.onNowEntities.length
+    if (n > 0) opts.push({ value: "on", label: n + " on" })
+    opts.push({ value: "recents", label: "Recents" })
+    opts.push({ value: "favorites", label: "Favorites" })
+    opts.push({ value: "rooms", label: "Rooms" })
+    return opts
   }
   readonly property var instanceOptions: {
     var list = []
@@ -44,10 +61,20 @@ Panel {
     return list
   }
   readonly property var tabEntities: {
-    if (!service) return []
-    if (tab === "favorites") return service.favoriteEntities || []
-    if (tab === "recents") return service.recentEntities || []
-    return []
+    var list = []
+    if (tab === "on") list = root.onNowEntities
+    else if (service && tab === "favorites") list = service.favoriteEntities || []
+    else if (service && tab === "recents") list = service.recentEntities || []
+    var q = String(root.filterQuery || "").toLowerCase()
+    if (!q) return list
+    var out = []
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i]
+      var name = String(e && e.name ? e.name : "").toLowerCase()
+      var eid = String(e && e.entity_id ? e.entity_id : "").toLowerCase()
+      if (name.indexOf(q) !== -1 || eid.indexOf(q) !== -1) out.push(e)
+    }
+    return out
   }
 
   function open() {
@@ -96,8 +123,7 @@ Panel {
   }
 
   function currentEntities() {
-    if (root.tab === "favorites") return service ? service.favoriteEntities : []
-    if (root.tab === "recents") return service ? service.recentEntities : []
+    if (root.tab === "on" || root.tab === "favorites" || root.tab === "recents") return root.tabEntities
     if (roomList.openRoom && roomList.openRoom.entities) return roomList.openRoom.entities
     return []
   }
@@ -144,11 +170,22 @@ Panel {
       if (keyCatcher) keyCatcher.forceActiveFocus()
       cursorActive = false
       if (service && service.pendingOpenAreaId) {
+        root.pinOnTab = false
         root.tab = "rooms"
         roomList.openAreaId = String(service.pendingOpenAreaId)
         service.pendingOpenAreaId = ""
+      } else {
+        root.pinOnTab = true
+        if (root.onNowEntities.length > 0) root.tab = "on"
       }
     }
+  }
+
+  onOnNowEntitiesChanged: {
+    if (root.tab === "on" && root.onNowEntities.length === 0)
+      root.tab = "rooms"
+    else if (root.opened && root.pinOnTab && root.onNowEntities.length > 0)
+      root.tab = "on"
   }
 
   KeyboardPanel {
@@ -205,9 +242,16 @@ Panel {
         else if (t === "s" || t === "S") {
           if (service) service.showSettings = !service.showSettings
         } else if (t === "f" || t === "F") root.toggleFocusedFavorite()
-        else if (t === "1") { root.tab = "recents"; if (service) service.showSettings = false }
-        else if (t === "2") { root.tab = "favorites"; if (service) service.showSettings = false }
-        else if (t === "3") { root.tab = "rooms"; if (service) service.showSettings = false }
+        else if (t === "o" || t === "O") {
+          if (root.onNowEntities.length > 0) {
+            root.pinOnTab = false
+            root.tab = "on"
+            if (service) service.showSettings = false
+          }
+        }
+        else if (t === "1") { root.pinOnTab = false; root.tab = "recents"; if (service) service.showSettings = false }
+        else if (t === "2") { root.pinOnTab = false; root.tab = "favorites"; if (service) service.showSettings = false }
+        else if (t === "3") { root.pinOnTab = false; root.tab = "rooms"; if (service) service.showSettings = false }
       }
 
       Column {
@@ -366,12 +410,11 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             value: root.tab
-            options: [
-              { value: "recents", label: "Recents" },
-              { value: "favorites", label: "Favorites" },
-              { value: "rooms", label: "Rooms" }
-            ]
-            onChanged: function(v) { root.tab = v }
+            options: root.tabOptions
+            onChanged: function(v) {
+              root.pinOnTab = false
+              root.tab = v
+            }
           }
 
           Flickable {
@@ -405,7 +448,7 @@ Panel {
                 Text {
                   visible: root.tabEntities.length === 0
                   width: parent.width
-                  text: root.tab === "favorites" ? "Star a device from a room." : "Act on a device to see it here."
+                  text: root.tab === "on" ? "Nothing is on." : (root.tab === "favorites" ? "Star a device from a room." : "Act on a device to see it here.")
                   color: root.dim
                   wrapMode: Text.WordWrap
                   font.family: root.fontFamily

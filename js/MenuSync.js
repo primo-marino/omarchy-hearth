@@ -49,7 +49,7 @@ function leaf(cli, entity) {
 function disconnected(cli) {
   return {
     "hearth": { icon: "󰋜", label: "Hearth", aliases: ["home assistant", "ha"] },
-    "hearth.open": { icon: "󰏥", label: "Open Hearth", action: "omarchy-shell shell summon hearth" },
+    "hearth.open": { icon: "󰏥", label: "Open Hearth", action: "omarchy-shell shell summon io.github.primo-marino.hearth" },
     "hearth.add": { icon: "", label: "Add Home Assistant", action: shQuote(cli) + " onboard" },
     "hearth.status": {
       icon: "󰋜",
@@ -63,7 +63,7 @@ function build(config, state, rooms, cli, connected) {
   var path = String(cli || "")
   var tree = {
     "hearth": { icon: "󰋜", label: "Hearth", aliases: ["home assistant", "ha"] },
-    "hearth.open": { icon: "󰏥", label: "Open Hearth", action: "omarchy-shell shell summon hearth" },
+    "hearth.open": { icon: "󰏥", label: "Open Hearth", action: "omarchy-shell shell summon io.github.primo-marino.hearth" },
     "hearth.add": { icon: "", label: "Add Home Assistant", action: shQuote(path) + " onboard" }
   }
   var instances = config && config.instances ? config.instances : []
@@ -132,7 +132,7 @@ function build(config, state, rooms, cli, connected) {
       tree[rkey + ".more"] = {
         icon: "󰏥",
         label: "Open " + rname + " in Hearth",
-        action: shQuote(path) + " open --room " + shQuote(rid)
+        action: shQuote(path) + " open --room " + shQuote(String(room.area_id || rid))
       }
     }
   }

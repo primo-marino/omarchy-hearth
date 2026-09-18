@@ -50,8 +50,8 @@ function primaryService(domain, kind, state) {
   if (kind === "activate") return "turn_on"
   if (kind === "media") return "media_play_pause"
   if (kind === "lock") return (state === "unlocked" || state === "unlocking") ? "lock" : "unlock"
-  if (domain === "cover") return "open_cover"
-  if (domain === "valve") return "open_valve"
+  if (domain === "cover") return (state === "open" || state === "opening") ? "close_cover" : "open_cover"
+  if (domain === "valve") return (state === "open" || state === "opening") ? "close_valve" : "open_valve"
   if (kind === "vacuum") return "start"
   if (kind === "remote") return state === "on" ? "turn_off" : "turn_on"
   if (kind === "humidifier" || kind === "water") return state === "on" ? "turn_off" : "turn_on"
@@ -625,6 +625,28 @@ function cloneRow(row) {
     pending: !!row.pending,
     lastError: row.lastError || ""
   }
+}
+
+function onNowList(rooms) {
+  var out = []
+  if (!rooms) return out
+  for (var i = 0; i < rooms.length; i++) {
+    var room = rooms[i]
+    var ents = room && room.entities ? room.entities : []
+    var roomName = String(room && room.name ? room.name : "")
+    for (var j = 0; j < ents.length; j++) {
+      var e = ents[j]
+      if (!e) continue
+      var k = e.kind
+      if ((k !== "toggle" && k !== "fan") || String(e.state) !== "on") continue
+      var row = cloneRow(e)
+      if (roomName && String(row.name || "").toLowerCase().indexOf(roomName.toLowerCase()) === -1)
+        row.name = roomName + " · " + row.name
+      out.push(row)
+    }
+  }
+  out.sort(function(a, b) { return String(a.name).localeCompare(String(b.name)) })
+  return out
 }
 
 function stubEntity(entityId) {

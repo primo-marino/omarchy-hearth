@@ -82,12 +82,9 @@ Item {
     return EnergyJs.empty()
   }
   readonly property string pillLabel: {
-    if (!configured) return "Hearth"
-    if (!root.connected) return "Hearth"
-    var power = EnergyJs.formatPower(root.energy && root.energy.solarPowerW)
-    if (power) return power
-    if (root.lightsOn > 0) return root.lightsOn + " on"
-    return "Hearth"
+    if (!configured || !root.connected) return ""
+    if (root.lightsOn > 0) return String(root.lightsOn)
+    return ""
   }
   readonly property string statusText: configured ? (activeName + " · " + connectionState) : "Hearth — not connected"
 
@@ -148,6 +145,7 @@ Item {
       return
     }
     if (msg.event === "connection") {
+      if (msg.instanceId && String(msg.instanceId) !== String(root.config.activeInstanceId)) return
       var nextState = String(msg.state || "idle")
       var wasUp = root._prevConnection === "connected"
       connectionState = nextState
@@ -164,12 +162,14 @@ Item {
       return
     }
     if (msg.event === "snapshot") {
+      if (msg.instanceId && String(msg.instanceId) !== String(root.config.activeInstanceId)) return
       snapFile.reload()
       Qt.callLater(function() { root.applySnapshot(snapFile.text()) })
       if (String(msg.reason || "") !== "registry") root.refreshEnergy(true)
       return
     }
     if (msg.event === "state_changed" && msg.entity) {
+      if (msg.instanceId && String(msg.instanceId) !== String(root.config.activeInstanceId)) return
       var eid = String(msg.entity.entity_id || "")
       var tracked = !!Entities.findEntity(root.rooms, eid)
       if (tracked) {
@@ -244,6 +244,7 @@ Item {
     var snap
     try { snap = JSON.parse(String(raw || "{}")) } catch (e) { return }
     if (!snap || typeof snap !== "object") return
+    if (snap.instanceId && String(snap.instanceId) !== String(root.config.activeInstanceId)) return
     if (!snap.states && !snap.areas && !snap.entities) return
     var areas = []
     var rawAreas = snap.areas || []
@@ -414,11 +415,13 @@ Item {
       target: { entity_id: eid }
     }
     if (data && typeof data === "object") payload.service_data = data
+    var iid = String(root.config.activeInstanceId || "")
     sendCmd({
       cmd: "call",
-      instanceId: root.config.activeInstanceId,
+      instanceId: iid,
       payload: payload
     }, function(msg) {
+      if (String(root.config.activeInstanceId || "") !== iid) return
       if (msg && msg.ok) {
         if (kind !== "toggle") {
           var done = root.pendingActs
@@ -566,7 +569,9 @@ Item {
         if (isFinite(t) && (Date.now() - t) < 3600000) return
       }
     }
-    sendCmd({ cmd: "energy", instanceId: config.activeInstanceId }, function(msg) {
+    var iid = String(config.activeInstanceId || "")
+    sendCmd({ cmd: "energy", instanceId: iid }, function(msg) {
+      if (String(root.config.activeInstanceId || "") !== iid) return
       if (msg && msg.ok && msg.data) root.applyEnergy(msg.data)
       else root.applyEnergy(EnergyJs.empty())
     })
@@ -656,15 +661,38 @@ Item {
     return JSON.stringify(root.actOnEntity(fields.entity_id || fields.entityId, fields.service, fields.service_data || fields.data))
   }
 
+  function clearHouseView() {
+    root.pendingActs = ({})
+    root.pendingWatch = false
+    root.rooms = []
+    root.favoriteEntities = []
+    root.recentEntities = []
+    root.lightsOn = 0
+    root.allAreas = []
+    root.haVersion = ""
+    root.locationName = ""
+    root.lastError = ""
+  }
+
   function setActiveId(id) {
     if (!Config.findInstance(config, id)) return JSON.stringify({ ok: false, error: "Unknown instance." })
     var prev = String(config.activeInstanceId || "")
     var next = String(id)
     if (prev === next) return JSON.stringify({ ok: true, skipped: "same" })
     if (prev && prev !== next) sendCmd({ cmd: "disconnect", instanceId: prev }, null)
-    config.activeInstanceId = next
-    writeConfig()
+    root.clearHouseView()
+    root.connectionState = "reconnecting"
+    root._prevConnection = "reconnecting"
+    root.config = Config.setActiveInstance(root.config, next)
+    root.writeConfig()
+    snapFile.reload()
+    Qt.callLater(function() {
+      if (String(root.config.activeInstanceId || "") !== next) return
+      root.applySnapshot(snapFile.text())
+      root.refreshLists()
+    })
     sendCmd({ cmd: "connect", instanceId: next }, null)
+    root.refreshEnergy(true)
     root.scheduleMenuSync()
     return JSON.stringify({ ok: true })
   }
@@ -673,7 +701,7 @@ Item {
     root.pendingInstanceId = ""
     root.addingInstance = true
     root.showSettings = false
-    if (root.shell && root.shell.summon) root.shell.summon("hearth", "{}")
+    if (root.shell && root.shell.summon) root.shell.summon("io.github.primo-marino.hearth", "{}")
   }
 
   function finishAddInstance() {
@@ -875,10 +903,12 @@ Item {
         root.configError = loaded.error
         return
       }
+      var prevActive = String(root.config.activeInstanceId || "")
       root.config = loaded.config
       root.configError = ""
-      if (root.helperReady && root.configured && root.config.activeInstanceId)
-        root.sendCmd({ cmd: "connect", instanceId: root.config.activeInstanceId }, null)
+      var nextActive = String(root.config.activeInstanceId || "")
+      if (root.helperReady && root.configured && nextActive && prevActive !== nextActive)
+        root.sendCmd({ cmd: "connect", instanceId: nextActive }, null)
       root.scheduleMenuSync()
     }
     onLoadFailed: {
@@ -894,7 +924,12 @@ Item {
     watchChanges: true
     printErrors: false
     onLoaded: root.applySnapshot(text())
-    onLoadFailed: { root.rooms = []; root.lightsOn = 0 }
+    onLoadFailed: {
+      root.rooms = []
+      root.allAreas = []
+      root.lightsOn = 0
+      root.refreshLists()
+    }
   }
 
   FileView {
@@ -938,7 +973,7 @@ Item {
   }
 
   IpcHandler {
-    target: "hearth"
+    target: "io.github.primo-marino.hearth"
 
     function ping(): string { return "ok" }
     function status(): string { return root.statusJson() }
@@ -954,7 +989,7 @@ Item {
     function sync(): string { var r = root.fullSync(); return r && r.ok ? "ok" : "error" }
     function reload(): string { return root.reloadFiles() }
     function openPanel(): string {
-      return (root.shell && root.shell.summon && root.shell.summon("hearth", "{}")) ? "ok" : "error"
+      return (root.shell && root.shell.summon && root.shell.summon("io.github.primo-marino.hearth", "{}")) ? "ok" : "error"
     }
   }
 }
