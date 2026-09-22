@@ -10,8 +10,6 @@ Plugins run unsandboxed inside `omarchy-shell`. Read this README before enabling
 
 ## Install
 
-After the public repo exists:
-
 ```sh
 omarchy plugin add https://github.com/primo-marino/omarchy-hearth.git --enable
 ```
@@ -23,8 +21,8 @@ Needs **Python 3** on PATH (stdlib only; no pip packages). Service code changes 
 ## Usage
 
 - **Click** the pill to open or close the panel. **Escape** closes it.
-- Pill text: live solar watts when Energy is configured, otherwise `N on`, otherwise `Hearth`.
-- Tabs: Recents / Favorites / Rooms (`1` / `2` / `3`). Star (`f`). Settings (`s`).
+- The pill is a house mark. When lights, switches, or fans are on it shows `N on`. Hover for the house name and, when Energy is configured, live power.
+- Opening the panel lands on **N on** when something is on. `1` / `2` / `3` are Recents / Favorites / Rooms. `o` returns to what is on. Star (`f`). Settings (`s`). Filter (`/`).
 - Fans with `percentage_step` get Off / 1 / 2 / 3. Climate ± and HVAC. Media play/pause + volume.
 - Header dropdown switches Home Assistant instances; **+** adds another. Only the active instance keeps a WebSocket.
 - Disconnect: header shows **Reconnecting…** and a desktop notification.
@@ -104,7 +102,6 @@ Lovelace clone, cameras, Frigate, HA subpaths, alarm panels that require a code,
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
 
 ## Support
 
