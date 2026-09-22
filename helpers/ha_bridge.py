@@ -162,11 +162,30 @@ def service_for_state(entity_id: str, state: str) -> str:
     return ""
 
 
+FLOW_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+
+
 def valid_origin(origin: str) -> bool:
-    if not origin or any(ch in origin for ch in " \r\n\t"):
+    """http(s) origin only. No userinfo, path, query, or control characters."""
+    if not origin or any(ord(ch) < 33 or ch in "\\" for ch in origin):
         return False
-    lower = origin.lower()
-    return lower.startswith("http://") or lower.startswith("https://")
+    parsed = urllib.parse.urlparse(origin)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if parsed.username or parsed.password or "@" in origin:
+        return False
+    if not parsed.hostname:
+        return False
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        return False
+    return True
+
+
+def safe_flow_id(value: Any) -> str:
+    text = str(value or "")
+    if not FLOW_ID_RE.match(text):
+        raise RuntimeError("login_flow failed")
+    return text
 
 
 def registry_hidden(reg: Any) -> bool:
@@ -290,8 +309,10 @@ def secret_for(instance_id: str) -> Optional[dict[str, Any]]:
 
 
 def put_secret(instance_id: str, rec: dict[str, Any]) -> None:
+    stored = dict(rec)
+    stored.setdefault("writtenAt", time.time())
     data = load_secrets()
-    data.setdefault("instances", {})[instance_id] = rec
+    data.setdefault("instances", {})[instance_id] = stored
     write_secrets(data)
 
 
@@ -308,7 +329,17 @@ def sweep_orphans() -> None:
     keep = {str(i.get("id")) for i in cfg.get("instances", []) if i and i.get("id")}
     data = load_secrets()
     inst = data.get("instances", {})
-    dropped = [k for k in list(inst.keys()) if k not in keep]
+    now = time.time()
+    dropped = []
+    for k in list(inst.keys()):
+        if k in keep:
+            continue
+        rec = inst.get(k)
+        written = rec.get("writtenAt") if isinstance(rec, dict) else None
+        # Keep a just-tested token until Save writes config.json.
+        if isinstance(written, (int, float)) and now - float(written) < 1800:
+            continue
+        dropped.append(k)
     if not dropped:
         return
     for k in dropped:
@@ -556,6 +587,7 @@ class HaSession:
         self.origin = origin
         self.tls_insecure = tls_insecure
         self.token = token
+        self._refresh_tried = False
         self.ws = None
         self.msg_id = 1
         self.stop = threading.Event()
@@ -798,6 +830,16 @@ class HaSession:
             except Exception as e:
                 if self.stop.is_set() or not self._is_current():
                     break
+                if (not self._refresh_tried) and "auth_invalid" in str(e).lower():
+                    self._refresh_tried = True
+                    fresh = secret_for(self.instance_id) or {}
+                    fresh["kind"] = fresh.get("kind") or "refresh"
+                    fresh["accessExpiresAt"] = ""
+                    updated = refresh_secret(self.instance_id, fresh, self.origin, self.tls_insecure)
+                    new_token = str(updated.get("accessToken") or "")
+                    if new_token and new_token != self.token:
+                        self.token = new_token
+                        continue
                 emit({"event": "connection", "instanceId": self.instance_id, "state": "reconnecting",
                       "error": str(e)})
             if self.stop.is_set() or not self._is_current():
@@ -957,10 +999,10 @@ def login_with_password(origin: str, username: str, password: str, tls_insecure:
         raise RuntimeError("login_flow failed (HTTP %s)" % code)
     if flow.get("type") == "form" and flow.get("step_id") not in (None, "init"):
         raise RuntimeError("mfa_required")
-    flow_id = flow["flow_id"]
+    flow_id = safe_flow_id(flow.get("flow_id"))
     code, step = http_json(
         "POST",
-        origin.rstrip("/") + "/auth/login_flow/" + flow_id,
+        origin.rstrip("/") + "/auth/login_flow/" + urllib.parse.quote(flow_id, safe=""),
         tls_insecure=tls_insecure,
         body={"client_id": cid, "username": username, "password": password},
     )
@@ -1040,14 +1082,57 @@ def cmd_login(cmd: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def access_is_stale(rec: dict[str, Any]) -> bool:
+    stamp = rec.get("accessExpiresAt")
+    if not stamp:
+        return rec.get("kind") == "refresh"
+    try:
+        exp = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return exp.timestamp() <= time.time() + 60
+
+
+def refresh_secret(instance_id: str, rec: dict[str, Any], origin: str, tls: bool) -> dict[str, Any]:
+    """Exchange a stored refresh token when the access token is missing or near expiry."""
+    if rec.get("kind") != "refresh":
+        return rec
+    if not rec.get("refreshToken") or not rec.get("clientId"):
+        return rec
+    if rec.get("accessToken") and not access_is_stale(rec):
+        return rec
+    code, body = http_json(
+        "POST",
+        origin.rstrip("/") + "/auth/token",
+        tls_insecure=tls,
+        form={
+            "grant_type": "refresh_token",
+            "refresh_token": str(rec["refreshToken"]),
+            "client_id": str(rec["clientId"]),
+        },
+    )
+    if code >= 400 or not isinstance(body, dict) or not body.get("access_token"):
+        return rec
+    updated = dict(rec)
+    updated["accessToken"] = str(body["access_token"])
+    if body.get("refresh_token"):
+        updated["refreshToken"] = str(body["refresh_token"])
+    if body.get("expires_in"):
+        try:
+            updated["accessExpiresAt"] = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + int(body["expires_in"]))
+            )
+        except (TypeError, ValueError):
+            pass
+    put_secret(instance_id, updated)
+    return updated
+
+
 def cmd_connect(cmd: dict[str, Any]) -> dict[str, Any]:
     instance_id = str(cmd.get("instanceId") or "")
     if not valid_instance_id(instance_id):
         return {"ok": False, "error": "connect requires instanceId"}
-    rec = secret_for(instance_id)
-    token = (rec or {}).get("accessToken")
-    if not token:
-        return {"ok": False, "error": "No token for this instance."}
+    rec = secret_for(instance_id) or {}
     cfg = load_config()
     inst = None
     for row in cfg.get("instances") or []:
@@ -1058,6 +1143,10 @@ def cmd_connect(cmd: dict[str, Any]) -> dict[str, Any]:
     tls = bool(cmd.get("tlsInsecure") if "tlsInsecure" in cmd else (inst or {}).get("tlsInsecure"))
     if not valid_origin(origin):
         return {"ok": False, "error": "No URL for this instance."}
+    rec = refresh_secret(instance_id, rec, origin, tls)
+    token = rec.get("accessToken")
+    if not token:
+        return {"ok": False, "error": "No token for this instance."}
     with lock:
         old = sessions.get(instance_id)
         if old:

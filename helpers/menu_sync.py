@@ -135,6 +135,9 @@ def sync(tree: Optional[dict[str, Any]] = None, cli: str = "", menu_path: str = 
     current_hash = file_sha(raw)
     if etag.get("treeHash") == tree_hash and current_hash == last_file:
         return {"ok": True, "skipped": "etag", "wrote": False}
+    # Same Hearth tree, but the user edited the file. Leave it until our tree changes.
+    if etag.get("treeHash") == tree_hash and last_file and current_hash != last_file:
+        return {"ok": True, "skipped": "user_edit", "wrote": False}
 
     merged = merge_hearth(parsed, tree)
     out = json.dumps(merged, indent=2, ensure_ascii=False) + "\n"

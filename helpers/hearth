@@ -96,7 +96,7 @@ def shell_running() -> bool:
 
 SERVICE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 INSTANCE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-ROOM_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
+ROOM_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
 def rest_act(entity_id: str, service: str, data: dict | None = None) -> dict:
@@ -143,7 +143,13 @@ def rest_act(entity_id: str, service: str, data: dict | None = None) -> dict:
             raw = ha_bridge.read_capped(resp)
             code = resp.getcode()
     except urllib.error.HTTPError as e:
-        return {"ok": False, "error": "HTTP %s" % e.code}
+        try:
+            return {"ok": False, "error": "HTTP %s" % e.code}
+        finally:
+            try:
+                e.close()
+            except Exception:
+                pass
     except urllib.error.URLError as e:
         return {"ok": False, "error": str(e.reason)}
     except RuntimeError as e:
@@ -256,13 +262,30 @@ def cmd_instance(instance_id: str) -> int:
     if not INSTANCE_RE.match(instance_id):
         sys.stderr.write("Bad instance id.\n")
         return 1
-    cfg = read_json(CONFIG_PATH, {"version": 1, "instances": [], "activeInstanceId": ""})
+    if not os.path.isfile(CONFIG_PATH):
+        sys.stderr.write("No Hearth config.\n")
+        return 1
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        sys.stderr.write("Could not read Hearth config.\n")
+        return 1
+    if not isinstance(cfg, dict):
+        sys.stderr.write("Could not read Hearth config.\n")
+        return 1
+    ids = [str(row.get("id")) for row in cfg.get("instances") or [] if isinstance(row, dict) and row.get("id")]
+    if instance_id not in ids:
+        sys.stderr.write("Unknown instance.\n")
+        return 1
     cfg["activeInstanceId"] = instance_id
     os.makedirs(os.path.dirname(CONFIG_PATH), mode=0o700, exist_ok=True)
     tmp = CONFIG_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
         f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, CONFIG_PATH)
     if shell_running():
         ipc("setActive", instance_id)

@@ -4,7 +4,7 @@ Remote-control Home Assistant from the Omarchy bar and Super-space menu.
 
 v0.1 is a **bar pill + popup panel** (same family as Weather and Tailscale), not a Lovelace dashboard, not a camera viewer, and not Frigate.
 
-Version **0.1.1**. Plugin id `io.github.primo-marino.hearth`.
+Version **0.1.2**. Plugin id `io.github.primo-marino.hearth`.
 
 Plugins run unsandboxed inside `omarchy-shell`. Read this README before enabling.
 

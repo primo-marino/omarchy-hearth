@@ -77,6 +77,30 @@ class MenuSyncTests(unittest.TestCase):
     def test_hearth_key_does_not_eat_hearthside(self):
         self.assertFalse(menu_sync.is_hearth_key("hearthside"))
 
+    def test_unchanged_tree_does_not_clobber_user_edit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            etag = os.path.join(tmp, "etag")
+            menu_sync.sync(
+                tree={"hearth": {"label": "Hearth"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=etag,
+            )
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            data["personal.notes"] = {"label": "Keep me"}
+            Path(path).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            result = menu_sync.sync(
+                tree={"hearth": {"label": "Hearth"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=etag,
+            )
+            self.assertEqual(result.get("skipped"), "user_edit")
+            self.assertFalse(result.get("wrote"))
+            kept = json.loads(Path(path).read_text(encoding="utf-8"))
+            self.assertEqual(kept["personal.notes"]["label"], "Keep me")
+
     def test_user_edit_still_merges_hearth_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "omarchy-menu.jsonc")

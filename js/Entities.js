@@ -515,10 +515,6 @@ function patch(rooms, entity) {
         ents[j].lastError = ""
         ents[j].service = primaryService(ents[j].domain, ents[j].kind, state)
         if (entity.attributes) ents[j].attrs = pickAttrs(entity)
-        if (entity.attributes && entity.attributes.friendly_name)
-          ents[j].name = String(entity.attributes.friendly_name)
-        else if (entity.name)
-          ents[j].name = String(entity.name)
         return rooms
       }
     }

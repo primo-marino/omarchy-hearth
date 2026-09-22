@@ -271,6 +271,11 @@ class BridgeUnitTests(unittest.TestCase):
         self.assertTrue(ha_bridge.valid_origin("http://127.0.0.1:8123"))
         self.assertFalse(ha_bridge.valid_origin("file:///etc/passwd"))
         self.assertFalse(ha_bridge.valid_origin("http://evil\nHost: x"))
+        self.assertFalse(ha_bridge.valid_origin("http://user:secret@ha.local:8123"))
+        self.assertFalse(ha_bridge.valid_origin("https://ha.local/ha"))
+        self.assertEqual(ha_bridge.safe_flow_id("abc12345"), "abc12345")
+        with self.assertRaises(RuntimeError):
+            ha_bridge.safe_flow_id("../auth/token")
 
     def test_http_json_refuses_redirect(self):
         import ha_bridge

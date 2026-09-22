@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.primo-marino.hearth",
   "name": "Hearth",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "primo-marino",
   "license": "MIT",
   "description": "Remote-control Home Assistant from the Omarchy bar and menu.",
