@@ -333,6 +333,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             visible: root.connectionState !== "connected"
             width: parent.width
             text: root.connectionState === "reconnecting"
@@ -446,6 +447,7 @@ Panel {
                 spacing: Style.space(8)
 
                 Text {
+                  textFormat: Text.PlainText
                   visible: root.tabEntities.length === 0
                   width: parent.width
                   text: root.tab === "on" ? "Nothing is on." : (root.tab === "favorites" ? "Star a device from a room." : "Act on a device to see it here.")

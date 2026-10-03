@@ -164,6 +164,7 @@ Item {
         width: parent.width
         spacing: Style.space(4)
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: entity.name || entity.entity_id || ""
           color: root.foreground
@@ -173,6 +174,7 @@ Item {
           elide: Text.ElideRight
         }
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: entity.pending ? "…" : (root.fanValue === "0" ? "off" : ("speed " + root.fanValue))
           color: root.dim
@@ -197,6 +199,7 @@ Item {
         width: parent.width
         spacing: Style.space(4)
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: entity.name || entity.entity_id || ""
           color: root.foreground
@@ -206,6 +209,7 @@ Item {
           elide: Text.ElideRight
         }
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: root.climateCaption()
           color: root.dim
@@ -242,6 +246,7 @@ Item {
         width: parent.width
         spacing: Style.space(4)
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: entity.name || entity.entity_id || ""
           color: root.foreground
@@ -251,6 +256,7 @@ Item {
           elide: Text.ElideRight
         }
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: entity.pending ? "…" : (entity.state || "")
           color: root.dim
@@ -286,6 +292,7 @@ Item {
           width: parent.width - actions.implicitWidth - parent.spacing
           spacing: Style.space(2)
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: entity.name || entity.entity_id || ""
             color: root.foreground
@@ -295,6 +302,7 @@ Item {
             elide: Text.ElideRight
           }
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: entity.pending ? "…" : (entity.state || "")
             color: root.dim
@@ -431,6 +439,7 @@ Item {
       }
 
       Text {
+        textFormat: Text.PlainText
         visible: root.errorText !== ""
         width: parent.width
         text: root.errorText

@@ -23,6 +23,7 @@ Row {
     visible: root.showSolar
     spacing: Style.space(2)
     Text {
+      textFormat: Text.PlainText
       text: "☀  " + Energy.formatKwh(energy.solarKwh)
       color: root.foreground
       font.family: root.fontFamily
@@ -30,6 +31,7 @@ Row {
       font.bold: true
     }
     Text {
+      textFormat: Text.PlainText
       text: "solar today"
       color: root.dim
       font.family: root.fontFamily
@@ -41,6 +43,7 @@ Row {
     visible: root.showImport
     spacing: Style.space(2)
     Text {
+      textFormat: Text.PlainText
       text: "↓  " + Energy.formatKwh(energy.gridImportKwh)
       color: root.foreground
       font.family: root.fontFamily
@@ -48,6 +51,7 @@ Row {
       font.bold: true
     }
     Text {
+      textFormat: Text.PlainText
       text: "grid in"
       color: root.dim
       font.family: root.fontFamily
@@ -59,6 +63,7 @@ Row {
     visible: root.showExport
     spacing: Style.space(2)
     Text {
+      textFormat: Text.PlainText
       text: "↑  " + Energy.formatKwh(energy.gridExportKwh)
       color: root.foreground
       font.family: root.fontFamily
@@ -66,6 +71,7 @@ Row {
       font.bold: true
     }
     Text {
+      textFormat: Text.PlainText
       text: "grid out"
       color: root.dim
       font.family: root.fontFamily
