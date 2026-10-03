@@ -51,6 +51,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     text: "Settings"
     color: root.foreground
@@ -60,6 +61,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     text: {
       var inst = service && service.activeInstance ? service.activeInstance() : null
@@ -73,6 +75,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     text: "Rooms"
     color: root.foreground
@@ -132,6 +135,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     text: "Replace token"
     color: root.foreground
@@ -165,6 +169,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     visible: root.statusMessage !== ""
     width: parent.width
     text: root.statusMessage

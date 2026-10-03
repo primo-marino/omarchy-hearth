@@ -99,6 +99,7 @@ BarWidget {
       }
 
       Text {
+        textFormat: Text.PlainText
         visible: root.countText !== ""
         text: root.countText
         color: root.pillColor

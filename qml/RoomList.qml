@@ -91,6 +91,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     visible: rooms.length === 0
     width: parent.width
     text: "No rooms yet. Hearth is connected — wait a moment for the house to load."
@@ -119,6 +120,7 @@ Column {
     spacing: Style.space(8)
 
     Text {
+      textFormat: Text.PlainText
       visible: openRoom && openRoom.entities && openRoom.entities.length === 0
       width: parent.width
       text: "Nothing to control in this room."

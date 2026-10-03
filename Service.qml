@@ -708,8 +708,14 @@ Item {
     root.addingInstance = false
   }
 
+  function escapeMarkup(text) {
+    return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  }
+
   function notifyLoss() {
-    var detail = root.lastError ? String(root.lastError) : "Reconnecting to Home Assistant"
+    // The notification body is rendered as markup, and lastError can carry
+    // text from Home Assistant, so escape it to show literally.
+    var detail = root.lastError ? escapeMarkup(String(root.lastError)) : "Reconnecting to Home Assistant"
     notifyProc.command = ["omarchy-notification-send", "-g", "󰋜", "-u", "normal", "Hearth disconnected", detail]
     notifyProc.running = false
     notifyProc.running = true

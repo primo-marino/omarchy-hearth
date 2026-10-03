@@ -211,6 +211,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     text: "Name"
     color: root.dim
@@ -226,6 +227,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     text: "Address"
     color: root.dim
@@ -241,6 +243,7 @@ Column {
     onTextChanged: root.urlText = text
   }
   Text {
+    textFormat: Text.PlainText
     visible: urlText.length > 0 && !urlOk
     width: parent.width
     text: parsedUrl.error || ""
@@ -305,6 +308,7 @@ Column {
     width: parent.width
     spacing: Style.space(6)
     Text {
+      textFormat: Text.PlainText
       width: parent.width
       text: "This URL is unencrypted HTTP. Tokens will travel in the clear on the path to Home Assistant."
       color: root.urgent
@@ -330,6 +334,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     visible: statusMessage !== ""
     width: parent.width
     text: statusMessage
@@ -350,6 +355,7 @@ Column {
       fontFamily: root.fontFamily
     }
     Text {
+      textFormat: Text.PlainText
       width: parent.width
       text: pendingAreas.length === 0 ? "No areas on this instance. You can still save and add rooms later in Settings." : "Pick rooms to control. All rooms includes Unassigned."
       color: root.dim
