@@ -27,11 +27,13 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool configured: service ? service.configured === true : false
   readonly property bool addingInstance: service ? service.addingInstance === true : false
-  readonly property bool showOnboard: !configured || addingInstance
+  readonly property string blockingError: service ? String(service.blockingError || "") : ""
+  readonly property bool showOnboard: (!configured || addingInstance) && blockingError === ""
   readonly property bool showSettings: service ? service.showSettings === true : false
   readonly property string connectionState: service ? String(service.connectionState || "idle") : "idle"
   readonly property var onNowEntities: Entities.onNowList(service && service.rooms ? service.rooms : [])
   readonly property string heroMeta: {
+    if (root.blockingError !== "") return root.blockingError
     if (connectionState === "reconnecting") return "Reconnecting…"
     if (service && service.lastError && connectionState !== "connected") return String(service.lastError)
     if (connectionState === "connected") {
@@ -284,6 +286,18 @@ Panel {
               }
             }
           }
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          visible: root.blockingError !== ""
+          width: parent.width
+          text: root.blockingError
+          color: Color.urgent
+          wrapMode: Text.WordWrap
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
         }
 
         Column {

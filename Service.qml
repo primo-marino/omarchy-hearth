@@ -38,6 +38,10 @@ Item {
   property bool configLoaded: false
   property bool configNewer: false
   property string configError: ""
+  property bool stateNewer: false
+  property string stateError: ""
+  property bool _warnedConfigNewer: false
+  property bool _warnedStateNewer: false
   property string pendingInstanceId: ""
   property string connectionState: "idle"
   property string lastError: ""
@@ -72,6 +76,7 @@ Item {
     return config.instances.length > 0 && String(config.activeInstanceId || "") !== ""
   }
   readonly property bool connected: connectionState === "connected"
+  readonly property string blockingError: configNewer ? configError : (stateNewer ? stateError : "")
   readonly property string activeName: {
     var inst = Config.findInstance(config, config.activeInstanceId)
     return inst && inst.name ? inst.name : "Hearth"
@@ -329,7 +334,15 @@ Item {
   }
 
   function writeState() {
+    if (root.stateNewer) {
+      if (!root._warnedStateNewer) {
+        root._warnedStateNewer = true
+        console.warn("hearth: not writing state — " + (root.stateError || "file is newer than this plugin"))
+      }
+      return false
+    }
     stateFile.setText(JSON.stringify(root.state, null, 2) + "\n")
+    return true
   }
 
   function isFavorite(entityId) {
@@ -343,6 +356,7 @@ Item {
     var eid = String(entityId || "")
     if (!Entities.validEntityId(eid)) return { ok: false, error: "Bad entity id." }
     if (!root.config.activeInstanceId) return { ok: false, error: "No instance." }
+    if (root.stateNewer) return { ok: false, error: root.stateError }
     var result = Config.toggleFavorite(root.state, root.config.activeInstanceId, eid)
     root.state = result.state
     root.writeState()
@@ -519,7 +533,7 @@ Item {
       selectedEntityIds: fields.selectedEntityIds || []
     }
     config = Config.upsertInstance(config, inst)
-    writeConfig()
+    if (!writeConfig()) return { ok: false, error: root.configError }
     sendCmd({ cmd: "connect", instanceId: pendingInstanceId, url: parsed.origin, tlsInsecure: !!inst.tlsInsecure }, function(msg) {
       if (msg && msg.ok) {
         connectionState = "connected"
@@ -578,7 +592,15 @@ Item {
   }
 
   function writeConfig() {
+    if (root.configNewer) {
+      if (!root._warnedConfigNewer) {
+        root._warnedConfigNewer = true
+        console.warn("hearth: not writing config — " + (root.configError || "file is newer than this plugin"))
+      }
+      return false
+    }
     configFile.setText(JSON.stringify(config, null, 2) + "\n")
+    return true
   }
 
   function activeInstance() {
@@ -601,7 +623,7 @@ Item {
       selectedEntityIds: inst.selectedEntityIds || []
     }
     root.config = Config.upsertInstance(root.config, next)
-    root.writeConfig()
+    if (!root.writeConfig()) return { ok: false, error: root.configError }
     snapFile.reload()
     return { ok: true }
   }
@@ -643,7 +665,7 @@ Item {
   }
 
   function statusJson() {
-    return JSON.stringify({
+    var out = {
       configured: configured,
       connected: connected,
       connectionState: connectionState,
@@ -652,7 +674,9 @@ Item {
       lastError: lastError,
       hasToken: configured,
       pillLabel: pillLabel
-    })
+    }
+    if (root.blockingError) out.error = root.blockingError
+    return JSON.stringify(out)
   }
 
   function actJson(payload) {
@@ -684,7 +708,7 @@ Item {
     root.connectionState = "reconnecting"
     root._prevConnection = "reconnecting"
     root.config = Config.setActiveInstance(root.config, next)
-    root.writeConfig()
+    if (!root.writeConfig()) return JSON.stringify({ ok: false, error: root.configError })
     snapFile.reload()
     Qt.callLater(function() {
       if (String(root.config.activeInstanceId || "") !== next) return
@@ -912,6 +936,7 @@ Item {
       var prevActive = String(root.config.activeInstanceId || "")
       root.config = loaded.config
       root.configError = ""
+      root.configNewer = false
       var nextActive = String(root.config.activeInstanceId || "")
       if (root.helperReady && root.configured && nextActive && prevActive !== nextActive)
         root.sendCmd({ cmd: "connect", instanceId: nextActive }, null)
@@ -946,10 +971,15 @@ Item {
     printErrors: false
     onLoaded: {
       var loaded = Config.loadState(text())
-      if (loaded.ok) {
-        root.state = loaded.state
-        root.refreshLists()
+      if (!loaded.ok) {
+        root.stateNewer = loaded.error.indexOf("newer") !== -1
+        root.stateError = loaded.error
+        return
       }
+      root.stateNewer = false
+      root.stateError = ""
+      root.state = loaded.state
+      root.refreshLists()
     }
     onLoadFailed: {
       root.state = Config.emptyState()
