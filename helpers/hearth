@@ -235,8 +235,20 @@ def cmd_act(entity_id: str, service: str, extra: str = "") -> int:
         payload_obj["service_data"] = data
     if shell_running():
         code, out = ipc("act", json.dumps(payload_obj))
-        sys.stdout.write((out or "") + "\n")
-        return 0 if code == 0 else 1
+        parsed = None
+        try:
+            parsed = json.loads(out) if out else None
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("ok") is True:
+            sys.stdout.write((out or "") + "\n")
+            return 0
+        disconnected = (isinstance(parsed, dict) and parsed.get("ok") is False and
+                        str(parsed.get("error") or "") == "Disconnected from Home Assistant.")
+        if not disconnected:
+            sys.stdout.write((out or "") + "\n")
+            return 1
+        # Shell is up but Hearth is disconnected: fall through to REST.
     svc = str(payload_obj.get("service") or service_from_state(entity_id, cache_entity_state(entity_id)))
     if not svc or not SERVICE_RE.match(svc):
         sys.stderr.write("Don't know the current state for this device.\n")

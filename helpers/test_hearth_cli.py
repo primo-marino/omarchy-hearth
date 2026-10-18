@@ -74,5 +74,57 @@ class HearthCliOpenTests(unittest.TestCase):
         self.assertEqual(args[0], ["omarchy-shell", "shell", "summon", "io.github.primo-marino.hearth", "{}"])
 
 
+class HearthCliActTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.old_home = os.environ.get("HOME")
+        self.addCleanup(self._restore_home)
+        self.mod = load_hearth(self.tmp.name)
+
+    def _restore_home(self):
+        if self.old_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self.old_home
+
+    def test_act_ipc_ok_does_not_fall_back(self):
+        with mock.patch.object(self.mod, "shell_running", return_value=True), \
+             mock.patch.object(self.mod, "ipc", return_value=(0, json.dumps({"ok": True}))), \
+             mock.patch.object(self.mod, "rest_act") as rest:
+            code = self.mod.cmd_act("light.kitchen", "toggle")
+        self.assertEqual(code, 0)
+        rest.assert_not_called()
+
+    def test_act_disconnected_falls_back_to_rest(self):
+        reply = json.dumps({"ok": False, "error": "Disconnected from Home Assistant."})
+        with mock.patch.object(self.mod, "shell_running", return_value=True), \
+             mock.patch.object(self.mod, "ipc", return_value=(0, reply)), \
+             mock.patch.object(self.mod, "rest_act", return_value={"ok": True}) as rest:
+            code = self.mod.cmd_act("light.kitchen", "toggle")
+        self.assertEqual(code, 0)
+        rest.assert_called_once()
+        args, _ = rest.call_args
+        self.assertEqual(args[0], "light.kitchen")
+        self.assertEqual(args[1], "toggle")
+
+    def test_act_other_error_does_not_fall_back(self):
+        reply = json.dumps({"ok": False, "error": "Call failed."})
+        with mock.patch.object(self.mod, "shell_running", return_value=True), \
+             mock.patch.object(self.mod, "ipc", return_value=(0, reply)), \
+             mock.patch.object(self.mod, "rest_act") as rest:
+            code = self.mod.cmd_act("light.kitchen", "toggle")
+        self.assertEqual(code, 1)
+        rest.assert_not_called()
+
+    def test_act_ipc_timeout_does_not_fall_back(self):
+        with mock.patch.object(self.mod, "shell_running", return_value=True), \
+             mock.patch.object(self.mod, "ipc", return_value=(124, "ipc timeout")), \
+             mock.patch.object(self.mod, "rest_act") as rest:
+            code = self.mod.cmd_act("light.kitchen", "toggle")
+        self.assertEqual(code, 1)
+        rest.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
