@@ -595,6 +595,7 @@ class HaSession:
         self.ha_version = ""
         self.time_zone = ""
         self.last_states: list[Any] = []
+        self._state_index: dict[str, dict[str, Any]] = {}
         self.last_services: dict[str, list[str]] = {}
         self._need_snapshot = False
         self._snap_at = 0.0
@@ -611,6 +612,20 @@ class HaSession:
         with self._id_lock:
             self.msg_id += 1
             return self.msg_id
+
+    def apply_state(self, entity: dict[str, Any]) -> None:
+        """Keep the live-state cache fresh from state_changed events."""
+        if not isinstance(entity, dict):
+            return
+        eid = str(entity.get("entity_id") or "")
+        if not eid:
+            return
+        self._state_index[eid] = entity
+        for i, st in enumerate(self.last_states):
+            if isinstance(st, dict) and str(st.get("entity_id") or "") == eid:
+                self.last_states[i] = entity
+                return
+        self.last_states.append(entity)
 
     def rpc(self, payload: dict[str, Any], timeout: float = 20.0) -> dict[str, Any]:
         if self.stop.is_set() or not self.ws:
@@ -807,6 +822,7 @@ class HaSession:
                         if et == "state_changed":
                             entity = ((msg.get("event") or {}).get("data") or {}).get("new_state")
                             if entity:
+                                self.apply_state(entity)
                                 emit({
                                     "event": "state_changed",
                                     "instanceId": self.instance_id,
@@ -911,6 +927,10 @@ class HaSession:
                         states = msg.get("result") or []
                     break
         self.last_states = states if isinstance(states, list) else []
+        self._state_index = {}
+        for st in self.last_states:
+            if isinstance(st, dict) and st.get("entity_id"):
+                self._state_index[str(st["entity_id"])] = st
         self.last_services = services if isinstance(services, dict) else {}
         cached_states, cached_entities = filter_actionable_states(states, entities)
         path = os.path.join(CACHE_DIR, "%s.json" % self.instance_id)
