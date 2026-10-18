@@ -72,22 +72,9 @@ Column {
     }
     var ents = visibleEntities()
     var row = ents[cursorIndex]
-    if (!row || !service || !service.actOnEntity) return
+    if (!row || !service || !service.activateEntity) return
     entityTouched(row.entity_id || "")
-    if (row.kind === "fan") {
-      if (Entities.fanHasSpeeds(row.attrs)) {
-        var cur = Entities.fanSpeedIndex(row.state, row.attrs)
-        var max = Entities.fanSpeedCount(row.attrs)
-        var next = cur >= max ? 0 : cur + 1
-        var pct = Entities.fanPercentageForIndex(next, row.attrs)
-        if (next <= 0 || pct <= 0) service.actOnEntity(row.entity_id, "turn_off")
-        else service.actOnEntity(row.entity_id, "set_percentage", { percentage: pct })
-      } else {
-        service.actOnEntity(row.entity_id, "toggle")
-      }
-      return
-    }
-    service.actOnEntity(row.entity_id, row.service)
+    service.activateEntity(row)
   }
 
   Text {

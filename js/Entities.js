@@ -45,7 +45,7 @@ function validEntityId(entityId) {
 
 function primaryService(domain, kind, state) {
   if (kind === "toggle") return "toggle"
-  if (kind === "fan") return "set_percentage"
+  if (kind === "fan") return "toggle"
   if (domain === "button" || domain === "input_button") return "press"
   if (kind === "activate") return "turn_on"
   if (kind === "media") return "media_play_pause"

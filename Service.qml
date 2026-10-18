@@ -384,6 +384,25 @@ Item {
     root.writeState()
   }
 
+  function activateEntity(row) {
+    if (!row || !row.entity_id) return
+    var eid = String(row.entity_id)
+    if (row.kind === "fan") {
+      if (Entities.fanHasSpeeds(row.attrs)) {
+        var cur = Entities.fanSpeedIndex(row.state, row.attrs)
+        var max = Entities.fanSpeedCount(row.attrs)
+        var next = cur >= max ? 0 : cur + 1
+        var pct = Entities.fanPercentageForIndex(next, row.attrs)
+        if (next <= 0 || pct <= 0) root.actOnEntity(eid, "turn_off")
+        else root.actOnEntity(eid, "set_percentage", { percentage: pct })
+      } else {
+        root.actOnEntity(eid, "toggle")
+      }
+      return
+    }
+    root.actOnEntity(eid, row.service)
+  }
+
   function actOnEntity(entityId, serviceName, data) {
     var eid = String(entityId || "")
     if (!Entities.validEntityId(eid)) return { ok: false, error: "Bad entity id." }

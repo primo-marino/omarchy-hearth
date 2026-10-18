@@ -230,8 +230,8 @@ Panel {
         else {
           var list = root.tabEntities || []
           for (var i = 0; i < list.length; i++) {
-            if (list[i].entity_id === root.focusedEntityId && service && service.actOnEntity)
-              service.actOnEntity(list[i].entity_id, list[i].service)
+            if (list[i].entity_id === root.focusedEntityId && service && service.activateEntity)
+              service.activateEntity(list[i])
           }
         }
       }
