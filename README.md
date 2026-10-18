@@ -92,7 +92,7 @@ rm -rf ~/.config/omarchy/hearth ~/.cache/omarchy/hearth
 
 ```sh
 cd helpers
-python -m unittest test_rfc6455.py test_energy.py test_menu_sync.py test_fan_math.py
+python -m unittest test_rfc6455.py test_energy.py test_menu_sync.py test_fan_math.py test_hearth_cli.py
 ```
 
 ## Non-goals (v0.1)

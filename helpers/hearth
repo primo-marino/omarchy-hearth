@@ -23,6 +23,7 @@ SECRETS_PATH = os.path.join(HOME, ".config", "omarchy", "hearth", "secrets.json"
 CACHE_DIR = os.path.join(HOME, ".cache", "omarchy", "hearth")
 PENDING_ROOM = os.path.join(CACHE_DIR, "pending-room")
 CLI = os.path.join(HERE, "hearth")
+PLUGIN_ID = "io.github.primo-marino.hearth"
 
 TOGGLE = {"light", "switch", "input_boolean", "siren"}
 ACTIVATE = {"scene", "script", "automation"}
@@ -76,7 +77,7 @@ def primary_service(entity_id: str, service: str) -> str:
 
 
 def ipc(method: str, *args: str) -> tuple[int, str]:
-    cmd = ["omarchy-shell", "io.github.primo-marino.hearth", method, *args]
+    cmd = ["omarchy-shell", PLUGIN_ID, method, *args]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
     except FileNotFoundError:
@@ -301,7 +302,25 @@ def cmd_open(room: str) -> int:
         os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
         with open(PENDING_ROOM, "w", encoding="utf-8") as f:
             f.write(room.strip() + "\n")
-    subprocess.run(["omarchy-shell", "shell", "summon", "hearth"], check=False)
+    cmd = ["omarchy-shell", "shell", "summon", PLUGIN_ID, "{}"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+    except FileNotFoundError:
+        sys.stderr.write("omarchy-shell is not running\n")
+        return 1
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("omarchy-shell summon timed out\n")
+        return 1
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip() or (proc.stdout or "").strip()
+        sys.stderr.write("Could not open Hearth" + (": " + detail if detail else "") + "\n")
+        return 1
+    out = (proc.stdout or "").strip()
+    if out != "ok":
+        detail = out or "shell returned unknown"
+        hint = " (is the Hearth pill on the bar and the plugin enabled?)" if out == "unknown" else ""
+        sys.stderr.write("Could not open Hearth: " + detail + hint + "\n")
+        return 1
     return 0
 
 
