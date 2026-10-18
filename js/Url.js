@@ -55,10 +55,6 @@ function parse(raw) {
     result.error = "URL cannot contain spaces."
     return result
   }
-  if (input.indexOf("/") !== -1 && input.indexOf("://") === -1 && input.charAt(0) !== "[") {
-    // Bare host with a path — v0.1 origin-only.
-  }
-
   var scheme = ""
   var rest = input
   var m = input.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//)
@@ -71,9 +67,19 @@ function parse(raw) {
     return result
   }
 
-  var hostport = rest
+  var cut = rest.length
   var slash = rest.indexOf("/")
-  if (slash !== -1) hostport = rest.slice(0, slash)
+  var q = rest.indexOf("?")
+  var hash = rest.indexOf("#")
+  if (slash !== -1 && slash < cut) cut = slash
+  if (q !== -1 && q < cut) cut = q
+  if (hash !== -1 && hash < cut) cut = hash
+  var hostport = rest.slice(0, cut)
+  var tail = rest.slice(cut)
+  if (tail !== "" && tail !== "/") {
+    result.error = "Home Assistant on a URL subpath is not supported. Enter just the address, e.g. https://gw.example"
+    return result
+  }
 
   var host = ""
   var portStr = ""
