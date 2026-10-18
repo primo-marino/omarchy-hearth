@@ -1,0 +1,24 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Python tests
+        run: cd helpers && python -m unittest -v test_rfc6455.py test_energy.py test_menu_sync.py test_fan_math.py test_hearth_cli.py test_ha_bridge.py
+      - name: JavaScript tests
+        run: node --test "tests/js/*.test.mjs"
