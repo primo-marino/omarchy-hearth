@@ -20,9 +20,73 @@ TREE_PATH = os.path.join(os.environ.get("HOME", ""), ".cache", "omarchy", "heart
 
 
 def strip_jsonc(raw: str) -> str:
-    text = re.sub(r"^\s*//[^\n]*(\n|$)", "", raw or "", flags=re.M)
-    text = re.sub(r",(\s*[}\]])", r"\1", text)
-    return text
+    text = raw or ""
+    out = []
+    i = 0
+    n = len(text)
+    in_string = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if ch == '\\' and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < n:
+            nxt = text[i + 1]
+            if nxt == '/':
+                i += 2
+                while i < n and text[i] != '\n':
+                    i += 1
+                continue
+            if nxt == '*':
+                i += 2
+                while i < n:
+                    if text[i] == '*' and i + 1 < n and text[i + 1] == '/':
+                        i += 2
+                        break
+                    if text[i] == '\n':
+                        out.append('\n')
+                    i += 1
+                continue
+        if ch == ',':
+            j = i + 1
+            while j < n:
+                c = text[j]
+                if c in ' \t\r\n':
+                    j += 1
+                    continue
+                if c == '/' and j + 1 < n:
+                    if text[j + 1] == '/':
+                        j += 2
+                        while j < n and text[j] != '\n':
+                            j += 1
+                        continue
+                    if text[j + 1] == '*':
+                        j += 2
+                        while j < n:
+                            if text[j] == '*' and j + 1 < n and text[j + 1] == '/':
+                                j += 2
+                                break
+                            j += 1
+                        continue
+                break
+            if j < n and text[j] in '}]':
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
 
 
 def is_hearth_key(key: str) -> bool:

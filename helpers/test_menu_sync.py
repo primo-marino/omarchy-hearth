@@ -14,6 +14,46 @@ class MenuSyncTests(unittest.TestCase):
         parsed = menu_sync.parse_object(raw)
         self.assertEqual(parsed["personal.notes"]["label"], "Notes")
 
+    def test_strip_jsonc_inline_line_comment(self):
+        raw = '{"a": 1, // note\n "b": 2}'
+        self.assertEqual(menu_sync.strip_jsonc(raw), '{"a": 1, \n "b": 2}')
+
+    def test_strip_jsonc_single_line_block_comment(self):
+        raw = '{"a": 1, /* note */ "b": 2}'
+        self.assertEqual(menu_sync.strip_jsonc(raw), '{"a": 1,  "b": 2}')
+
+    def test_strip_jsonc_multi_line_block_comment(self):
+        raw = '{\n  /* line1\n     line2 */\n  "a": 1\n}'
+        self.assertEqual(menu_sync.strip_jsonc(raw), '{\n  \n\n  "a": 1\n}')
+
+    def test_strip_jsonc_keeps_double_slash_in_string(self):
+        raw = '{"a": "http://x // not comment"}'
+        self.assertEqual(menu_sync.strip_jsonc(raw), raw)
+
+    def test_strip_jsonc_keeps_block_open_in_string(self):
+        raw = '{"a": "/* not comment */"}'
+        self.assertEqual(menu_sync.strip_jsonc(raw), raw)
+
+    def test_strip_jsonc_keeps_comma_brace_in_string(self):
+        raw = '{"a": "x, }"}'
+        self.assertEqual(menu_sync.strip_jsonc(raw), raw)
+
+    def test_strip_jsonc_trailing_comma_object(self):
+        raw = '{"a": 1,}'
+        self.assertEqual(menu_sync.strip_jsonc(raw), '{"a": 1}')
+
+    def test_strip_jsonc_trailing_comma_array(self):
+        raw = '{"a": [1, 2,]}'
+        self.assertEqual(menu_sync.strip_jsonc(raw), '{"a": [1, 2]}')
+
+    def test_strip_jsonc_escaped_quote_then_comment(self):
+        raw = '{"a": "x\\" // not comment"}'
+        self.assertEqual(menu_sync.strip_jsonc(raw), raw)
+
+    def test_strip_jsonc_escaped_quote_then_real_comment(self):
+        raw = '{"a": "x\\"", // real\n "b": 2}'
+        self.assertEqual(menu_sync.strip_jsonc(raw), '{"a": "x\\"", \n "b": 2}')
+
     def test_parse_fail_is_none(self):
         self.assertIsNone(menu_sync.parse_object("{not json"))
 
