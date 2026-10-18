@@ -147,6 +147,238 @@ def merge_hearth(existing: dict[str, Any], tree: dict[str, Any]) -> dict[str, An
     return out
 
 
+def skip_ws_comments(text: str, i: int) -> int:
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c in ' \t\r\n':
+            i += 1
+            continue
+        if c == '/' and i + 1 < n:
+            if text[i + 1] == '/':
+                i += 2
+                while i < n and text[i] != '\n':
+                    i += 1
+                continue
+            if text[i + 1] == '*':
+                i += 2
+                while i < n:
+                    if text[i] == '*' and i + 1 < n and text[i + 1] == '/':
+                        i += 2
+                        break
+                    i += 1
+                continue
+        break
+    return i
+
+
+def skip_string(text: str, i: int) -> int:
+    n = len(text)
+    i += 1
+    while i < n:
+        if text[i] == '\\':
+            i += 2
+            continue
+        if text[i] == '"':
+            return i + 1
+        i += 1
+    return i
+
+
+def skip_container(text: str, i: int, open_ch: str, close_ch: str) -> int:
+    n = len(text)
+    depth = 0
+    while i < n:
+        c = text[i]
+        if c == '"':
+            i = skip_string(text, i)
+            continue
+        if c == '/' and i + 1 < n:
+            if text[i + 1] == '/':
+                i += 2
+                while i < n and text[i] != '\n':
+                    i += 1
+                continue
+            if text[i + 1] == '*':
+                i += 2
+                while i < n:
+                    if text[i] == '*' and i + 1 < n and text[i + 1] == '/':
+                        i += 2
+                        break
+                    i += 1
+                continue
+        if c == open_ch:
+            depth += 1
+        elif c == close_ch:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return i
+
+
+def skip_value(text: str, i: int) -> int:
+    n = len(text)
+    if i >= n:
+        return i
+    c = text[i]
+    if c == '"':
+        return skip_string(text, i)
+    if c == '{':
+        return skip_container(text, i, '{', '}')
+    if c == '[':
+        return skip_container(text, i, '[', ']')
+    while i < n:
+        c = text[i]
+        if c in ' \t\r\n,}]':
+            break
+        if c == '/' and i + 1 < n and text[i + 1] in '/*':
+            break
+        i += 1
+    return i
+
+
+def _member_spans(text: str):
+    n = len(text)
+    i = skip_ws_comments(text, 0)
+    if i >= n or text[i] != '{':
+        return None
+    root_open = i
+    i += 1
+    members = []
+    while True:
+        i = skip_ws_comments(text, i)
+        if i >= n:
+            return None
+        if text[i] == '}':
+            root_close = i
+            break
+        if text[i] != '"':
+            return None
+        key_start = i
+        i = skip_string(text, i)
+        key_end = i
+        try:
+            key = json.loads(text[key_start:key_end])
+        except json.JSONDecodeError:
+            return None
+        i = skip_ws_comments(text, i)
+        if i >= n or text[i] != ':':
+            return None
+        i += 1
+        i = skip_ws_comments(text, i)
+        i = skip_value(text, i)
+        value_end = i
+        j = skip_ws_comments(text, value_end)
+        comma = j if j < n and text[j] == ',' else -1
+        i = comma + 1 if comma >= 0 else j
+        members.append({
+            'key': key,
+            'key_start': key_start,
+            'value_end': value_end,
+            'comma': comma,
+        })
+    return (root_open, root_close, members)
+
+
+def _removal_span(text: str, m: dict) -> tuple[int, int]:
+    s = m['key_start']
+    ls = text.rfind('\n', 0, s) + 1
+    if text[ls:s].strip(' \t') == '':
+        s = ls
+    e = m['comma'] + 1 if m['comma'] >= 0 else m['value_end']
+    k = e
+    while k < len(text) and text[k] in ' \t':
+        k += 1
+    if k < len(text) and text[k] == '\n' and s == ls:
+        e = k + 1
+    elif k >= len(text) or text[k] in '\r':
+        e = k
+    return s, e
+
+
+def splice_hearth(raw: str, tree: dict[str, Any]) -> Optional[str]:
+    parsed = parse_object(raw)
+    if parsed is None:
+        return None
+    spans = _member_spans(raw)
+    if spans is None:
+        return None
+    root_open, root_close, members = spans
+
+    hearth_members = [m for m in members if is_hearth_key(m['key'])]
+    kept_members = [m for m in members if not is_hearth_key(m['key'])]
+
+    # Was the last kept member originally followed by a hearth member?
+    last_kept_followed_by_hearth = False
+    if kept_members:
+        last_kept = kept_members[-1]
+        for m in members:
+            if m is last_kept:
+                continue
+            if m['key_start'] > last_kept['key_start'] and is_hearth_key(m['key']):
+                last_kept_followed_by_hearth = True
+                break
+
+    removals = [_removal_span(raw, m) for m in hearth_members]
+    removals.sort(key=lambda x: x[0], reverse=True)
+    text2 = raw
+    for s, e in removals:
+        text2 = text2[:s] + text2[e:]
+
+    spans2 = _member_spans(text2)
+    if spans2 is None:
+        return None
+    root_open2, root_close2, members2 = spans2
+    kept2 = [m for m in members2 if not is_hearth_key(m['key'])]
+
+    new_member_texts = []
+    for key, value in tree.items():
+        if not is_hearth_key(key):
+            continue
+        value_str = json.dumps(value, indent=2, ensure_ascii=False).replace('\n', '\n  ')
+        new_member_texts.append('  ' + json.dumps(key) + ': ' + value_str)
+
+    if kept2:
+        last = kept2[-1]
+        has_comma = last['comma'] >= 0
+        if new_member_texts and not has_comma:
+            text2 = text2[:last['value_end']] + ',' + text2[last['value_end']:]
+            spans2 = _member_spans(text2)
+            if spans2 is None:
+                return None
+            root_open2, root_close2, members2 = spans2
+            kept2 = [m for m in members2 if not is_hearth_key(m['key'])]
+        elif not new_member_texts and has_comma and last_kept_followed_by_hearth:
+            text2 = text2[:last['comma']] + text2[last['comma'] + 1:]
+            spans2 = _member_spans(text2)
+            if spans2 is None:
+                return None
+            root_open2, root_close2, members2 = spans2
+
+    if not new_member_texts:
+        parsed_new = parse_object(text2)
+        if parsed_new is None:
+            return None
+        if parsed_new != merge_hearth(parsed, tree):
+            return None
+        return text2
+
+    before = text2[:root_close2]
+    after = text2[root_close2:]
+    insertion = ''
+    if before and not before.endswith('\n'):
+        insertion += '\n'
+    insertion += ',\n'.join(new_member_texts) + '\n'
+    new_text = before + insertion + after
+    parsed_new = parse_object(new_text)
+    if parsed_new is None:
+        return None
+    if parsed_new != merge_hearth(parsed, tree):
+        return None
+    return new_text
+
+
 def disconnected_tree(cli: str) -> dict[str, Any]:
     return {
         "hearth": {"icon": "󰋜", "label": "Hearth", "aliases": ["home assistant", "ha"]},
@@ -190,6 +422,9 @@ def sync(tree: Optional[dict[str, Any]] = None, cli: str = "", menu_path: str = 
         except OSError as e:
             return {"ok": False, "error": "read_failed", "detail": str(e), "wrote": False}
 
+    if not raw.strip():
+        raw = "{}\n"
+
     parsed = parse_object(raw)
     if parsed is None:
         return {"ok": False, "error": "parse_failed", "wrote": False}
@@ -203,8 +438,9 @@ def sync(tree: Optional[dict[str, Any]] = None, cli: str = "", menu_path: str = 
     if etag.get("treeHash") == tree_hash and last_file and current_hash != last_file:
         return {"ok": True, "skipped": "user_edit", "wrote": False}
 
-    merged = merge_hearth(parsed, tree)
-    out = json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
+    out = splice_hearth(raw, tree)
+    if out is None:
+        return {"ok": False, "error": "splice_failed", "wrote": False}
 
     bak_day = str(etag.get("bakDay") or "")
     today = date.today().isoformat()
@@ -224,7 +460,7 @@ def sync(tree: Optional[dict[str, Any]] = None, cli: str = "", menu_path: str = 
         "writtenAt": now,
         "bakDay": bak_day,
     }, indent=2) + "\n", 0o644)
-    return {"ok": True, "wrote": True, "keys": sum(1 for k in merged if is_hearth_key(k))}
+    return {"ok": True, "wrote": True, "keys": sum(1 for k in tree if is_hearth_key(k))}
 
 
 def uninstall(menu_path: str = MENU_PATH) -> dict[str, Any]:

@@ -109,10 +109,11 @@ class MenuSyncTests(unittest.TestCase):
             )
             self.assertTrue(result["ok"])
             self.assertTrue(result["wrote"])
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            text = Path(path).read_text(encoding="utf-8")
+            data = menu_sync.parse_object(text)
             self.assertEqual(data["personal.notes"]["label"], "Notes")
             self.assertEqual(data["hearth"]["label"], "Hearth")
-            self.assertNotIn("//", Path(path).read_text(encoding="utf-8"))
+            self.assertIn("// keep me", text)
 
     def test_hearth_key_does_not_eat_hearthside(self):
         self.assertFalse(menu_sync.is_hearth_key("hearthside"))
@@ -171,9 +172,236 @@ class MenuSyncTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump({"personal.notes": {"label": "N"}, "hearth": {"label": "H"}}, f)
             menu_sync.sync(tree={}, cli="", menu_path=path, etag_path=os.path.join(tmp, "etag"))
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            data = menu_sync.parse_object(Path(path).read_text(encoding="utf-8"))
             self.assertIn("personal.notes", data)
             self.assertNotIn("hearth", data)
+
+    def test_header_comment_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{\n  // header comment\n  "hearth": {"label": "H"},\n  "a": 1\n}\n')
+            result = menu_sync.sync(
+                tree={"hearth": {"label": "H2"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=os.path.join(tmp, "etag"),
+            )
+            self.assertTrue(result["ok"])
+            text = Path(path).read_text(encoding="utf-8")
+            self.assertIn("// header comment", text)
+            self.assertIn('"a": 1', text)
+            self.assertIn('"label": "H2"', text)
+
+    def test_inline_comment_on_previous_member_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{\n  "a": 1, // note about a\n  "hearth": {"label": "H"}\n}\n')
+            result = menu_sync.sync(
+                tree={"hearth": {"label": "H2"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=os.path.join(tmp, "etag"),
+            )
+            self.assertTrue(result["ok"])
+            text = Path(path).read_text(encoding="utf-8")
+            self.assertIn("// note about a", text)
+            self.assertIn('"a": 1', text)
+            self.assertIn('"label": "H2"', text)
+
+    def test_uninstall_strict_json_stays_strict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"personal.notes": {"label": "N"}, "hearth": {"label": "H"}}, f)
+            menu_sync.sync(tree={}, cli="", menu_path=path, etag_path=os.path.join(tmp, "etag"))
+            text = Path(path).read_text(encoding="utf-8")
+            data = json.loads(text)
+            self.assertIn("personal.notes", data)
+            self.assertNotIn("hearth", data)
+
+    def test_sync_strict_json_stays_strict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"personal.notes": {"label": "N"}}, f)
+            result = menu_sync.sync(
+                tree={"hearth": {"label": "H"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=os.path.join(tmp, "etag"),
+            )
+            self.assertTrue(result["ok"])
+            text = Path(path).read_text(encoding="utf-8")
+            data = json.loads(text)
+            self.assertIn("personal.notes", data)
+            self.assertIn("hearth", data)
+
+    def test_two_syncs_no_blank_line_buildup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            etag = os.path.join(tmp, "etag")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{\n  "personal.notes": {"label": "Notes"}\n}\n')
+            menu_sync.sync(
+                tree={"hearth": {"label": "H1"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=etag,
+            )
+            first = Path(path).read_text(encoding="utf-8")
+            menu_sync.sync(
+                tree={"hearth": {"label": "H2"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=etag,
+            )
+            second = Path(path).read_text(encoding="utf-8")
+            self.assertEqual(first.count("\n"), second.count("\n"))
+            self.assertNotIn("\n\n\n", second)
+
+    def test_uninstall_drops_trailing_comma_before_removed_hearth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{\n  "a": 1,\n  "hearth": {"label": "H"}\n}\n')
+            menu_sync.sync(tree={}, cli="", menu_path=path, etag_path=os.path.join(tmp, "etag"))
+            text = Path(path).read_text(encoding="utf-8")
+            self.assertNotIn('"a": 1,', text)
+            self.assertIn('"a": 1', text)
+            data = menu_sync.parse_object(text)
+            self.assertEqual(data, {"a": 1})
+
+    def test_uninstall_keeps_original_trailing_comma(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{\n  "a": 1,\n}\n')
+            menu_sync.sync(tree={}, cli="", menu_path=path, etag_path=os.path.join(tmp, "etag"))
+            text = Path(path).read_text(encoding="utf-8")
+            self.assertIn('"a": 1,', text)
+            data = menu_sync.parse_object(text)
+            self.assertEqual(data, {"a": 1})
+
+    def test_hearth_in_middle_replaced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{\n  "a": 1,\n  "hearth.old": {"label": "Old"},\n  "b": 2\n}\n')
+            result = menu_sync.sync(
+                tree={"hearth.new": {"label": "New"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=os.path.join(tmp, "etag"),
+            )
+            self.assertTrue(result["ok"])
+            text = Path(path).read_text(encoding="utf-8")
+            self.assertIn('"a": 1', text)
+            self.assertIn('"b": 2', text)
+            self.assertIn('"hearth.new"', text)
+            self.assertNotIn('"hearth.old"', text)
+
+    def test_second_sync_updates_hearth_keeps_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            etag = os.path.join(tmp, "etag")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{\n  // keep me\n  "personal.notes": {"label": "Notes"}\n}\n')
+            menu_sync.sync(
+                tree={"hearth": {"label": "Hearth"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=etag,
+            )
+            result = menu_sync.sync(
+                tree={"hearth": {"label": "Hearth2"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=etag,
+            )
+            self.assertTrue(result["ok"])
+            text = Path(path).read_text(encoding="utf-8")
+            self.assertIn("// keep me", text)
+            self.assertIn('"label": "Hearth2"', text)
+
+    def test_uninstall_keeps_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{\n  // keep me\n  "personal.notes": {"label": "Notes"},\n  "hearth": {"label": "Hearth"}\n}\n')
+            menu_sync.sync(tree={}, cli="", menu_path=path, etag_path=os.path.join(tmp, "etag"))
+            text = Path(path).read_text(encoding="utf-8")
+            self.assertIn("// keep me", text)
+            self.assertNotIn("hearth", text)
+
+    def test_hearthside_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{\n  "hearthside": {"label": "Not Hearth"}\n}\n')
+            result = menu_sync.sync(
+                tree={"hearth": {"label": "Hearth"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=os.path.join(tmp, "etag"),
+            )
+            self.assertTrue(result["ok"])
+            text = Path(path).read_text(encoding="utf-8")
+            self.assertIn('"hearthside"', text)
+            self.assertIn('"hearth"', text)
+
+    def test_result_always_parses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{\n  "personal.notes": {"label": "Notes"}\n}\n')
+            result = menu_sync.sync(
+                tree={"hearth": {"label": "Hearth"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=os.path.join(tmp, "etag"),
+            )
+            self.assertTrue(result["ok"])
+            text = Path(path).read_text(encoding="utf-8")
+            parsed = menu_sync.parse_object(text)
+            self.assertIsNotNone(parsed)
+            self.assertIn("hearth", parsed)
+
+    def test_last_member_trailing_comma(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{\n  "personal.notes": {"label": "Notes"},\n}\n')
+            result = menu_sync.sync(
+                tree={"hearth": {"label": "Hearth"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=os.path.join(tmp, "etag"),
+            )
+            self.assertTrue(result["ok"])
+            text = Path(path).read_text(encoding="utf-8")
+            self.assertIn('"personal.notes"', text)
+            self.assertIn('"hearth"', text)
+            parsed = menu_sync.parse_object(text)
+            self.assertIsNotNone(parsed)
+
+    def test_only_hearth_keys_plus_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "omarchy-menu.jsonc")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{\n  // comment\n  "hearth": {"label": "Hearth"}\n}\n')
+            result = menu_sync.sync(
+                tree={"hearth": {"label": "Hearth2"}},
+                cli="/tmp/hearth",
+                menu_path=path,
+                etag_path=os.path.join(tmp, "etag"),
+            )
+            self.assertTrue(result["ok"])
+            text = Path(path).read_text(encoding="utf-8")
+            parsed = menu_sync.parse_object(text)
+            self.assertIsNotNone(parsed)
+            self.assertEqual(parsed["hearth"]["label"], "Hearth2")
 
 
 if __name__ == "__main__":

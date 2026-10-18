@@ -55,9 +55,9 @@ The helper accepts only `call_service` for a valid `entity_id` (no other Home As
 
 Hearth **rewrites only keys matching** `/^hearth(\.|$)/` in `~/.config/omarchy/extensions/omarchy-menu.jsonc` so rooms and favorites show up under Super-space. That is an explicit menu integration, not a silent rewrite of the rest of the file:
 
-- Parse failure → **no write**
-- Keys that are not `hearth*` are left alone
-- Comments on rewritten `hearth*` keys are lost; keep notes off those keys
+- Parse or splice failure → **no write**
+- Keys that are not `hearth*` are left alone, including comments and formatting
+- Comments next to `hearth*` entries are kept but may end up next to other entries; comments inside `hearth*` values are lost
 - A daily `.bak` is written beside the file
 - `hearth uninstall-menu` deletes `hearth*` keys only
 
