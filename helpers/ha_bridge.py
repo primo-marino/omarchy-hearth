@@ -727,6 +727,7 @@ class HaSession:
                             pass
                     break
                 backoff = 1
+                self._refresh_tried = False
                 cfg = ws_get_config(self.ws, self.next_id)
                 if self.stop.is_set() or not self._is_current():
                     ws = self.ws
